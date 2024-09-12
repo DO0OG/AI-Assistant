@@ -44,8 +44,8 @@ class AIAssistant:
         if not response or not response.strip():
             response = "죄송합니다, 응답을 생성하는 데 문제가 있었습니다. 다시 한 번 말씀해 주시겠습니까?"
         else:
-            # 'AI:' 이후의 텍스트만 추출
-            response = response.split("AI:")[-1].strip()
+            # '아리:' 이후의 텍스트만 추출하고 '주인님:' 이전에서 멈춤
+            response = response.split("아리:")[-1].split("주인님:")[0].strip()
         print(f"AI: {response}")
         return response
 

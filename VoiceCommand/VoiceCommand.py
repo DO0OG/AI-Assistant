@@ -315,6 +315,10 @@ class CharacterWidget(QWidget):
 
         self.fall_frame = 0
 
+        self.interaction_timer = QTimer(self)
+        self.interaction_timer.timeout.connect(self.interact_with_others)
+        self.interaction_timer.start(5000)  # 5초마다 상호작용 시도
+
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
 
@@ -432,6 +436,10 @@ class CharacterWidget(QWidget):
             self.update()
             self.start_auto_move()
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.start_fall()
+
     def update_drag_image(self, new_pos):
         if new_pos.x() < self.last_pos.x():
             self.current_image = self.drag_images[2]
@@ -534,6 +542,13 @@ class CharacterWidget(QWidget):
         self.action_duration_timer.stop()
         self.idle()
 
+    def start_fall(self):
+        if not self.falling:
+            self.falling = True
+            self.stop_auto_move()
+            self.fall_frame = 0
+            self.fall_timer.start(50)
+
     def fall(self):
         if not self.falling:
             return
@@ -547,6 +562,7 @@ class CharacterWidget(QWidget):
             self.fall_timer.stop()
             new_pos.setY(screen.height() - self.height())
             self.current_image = self.idle_image
+            self.start_auto_move()  # 떨어진 후 다시 자동 이동 시작
         else:
             self.fall_frame = (self.fall_frame + 1) % len(self.fall_images)
             self.current_image = self.fall_images[self.fall_frame]
@@ -554,11 +570,31 @@ class CharacterWidget(QWidget):
         self.move(new_pos)
         self.update()
 
-    def start_fall(self):
-        self.falling = True
-        self.stop_auto_move()
-        self.fall_frame = 0
-        self.fall_timer.start(50)
+    def interact_with_others(self):
+        if self.parent() and hasattr(self.parent(), 'character_widgets'):
+            others = [char for char in self.parent().character_widgets if char != self]
+            if others:
+                target = random.choice(others)
+                self.move_towards(target.pos())
+
+    def move_towards(self, target_pos):
+        if self.falling or self.is_dragging:
+            return
+
+        current_pos = self.pos()
+        dx = target_pos.x() - current_pos.x()
+        dy = target_pos.y() - current_pos.y()
+        distance = (dx**2 + dy**2)**0.5
+        
+        if distance > 5:
+            speed = 5
+            ratio = speed / distance
+            new_x = current_pos.x() + dx * ratio
+            new_y = current_pos.y() + dy * ratio
+            self.move(QPoint(int(new_x), int(new_y)))
+            self.current_image = self.move_images[self.current_frame]
+            self.current_frame = (self.current_frame + 1) % len(self.move_images)
+            self.update()
 
 
 class VoiceCommandThread(QThread):
@@ -732,9 +768,6 @@ class SystemTrayIcon(QSystemTrayIcon):
             2000,
         )
 
-        # 여기서 캐릭터를 추가하는 부분을 제거합니다.
-        # self.add_character()  # 이 줄을 주석 처리하거나 제거합니다.
-
     def handle_command(self, command):
         logging.info(f"받은 명령: {command}")
         if "종료" in command:
@@ -799,6 +832,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         farewell = random.choice(farewells)
         text_to_speech(farewell)
         logging.info("프로그램을 종료합니다.")
+        for character in self.character_widgets:
+            character.close()
+        self.character_widgets.clear()
         QTimer.singleShot(2000, self.exit)  # 2초 후에 exit 메서드 호출
 
     def exit(self):
@@ -818,22 +854,15 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def add_character(self):
         if len(self.character_widgets) < self.max_characters:
-            character = CharacterWidget()
+            character = CharacterWidget(self.parent())  # parent 설정
             character.show()
-            character.exit_signal.connect(
-                lambda: self.remove_specific_character(character)
-            )  # 종료 신호 연결
+            character.exit_signal.connect(lambda: self.remove_specific_character(character))
             self.character_widgets.append(character)
             self.remove_character_action.setEnabled(True)
             if len(self.character_widgets) == self.max_characters:
                 self.add_character_action.setEnabled(False)
         else:
-            self.showMessage(
-                "Ari",
-                f"최대 캐릭터 수({self.max_characters}마리)에 도달했습니다.",
-                QSystemTrayIcon.Information,
-                2000,
-            )
+            self.showMessage("Ari", f"최대 캐릭터 수({self.max_characters}마리)에 도달했습니다.", QSystemTrayIcon.Information, 2000)
 
     def remove_character(self):
         if self.character_widgets:
@@ -864,6 +893,302 @@ class SystemTrayIcon(QSystemTrayIcon):
         for character in self.character_widgets:
             character.start_random_move()
 
+class CharacterWidget(QWidget):
+    exit_signal = Signal()
+    toggle_voice_recognition = Signal()
+    set_listening_state_signal = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.is_listening = False
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        self.offset = QPoint()
+        self.animation = None
+        self.context_menu = None
+        self.is_moving = False
+        self.is_dragging = False
+        self.current_frame = 0
+        self.last_pos = self.pos()
+
+        self.facing_right = False
+        self.actions = ["idle", "move", "sit"]
+        self.current_action = "idle"
+
+        self.image_cache = {}
+        self.falling = False
+        self.fall_frame = 0
+
+        self.initUI()
+        self.load_images()
+        self.start_auto_move()
+
+    def initUI(self):
+        self.setGeometry(100, 100, 100, 100)
+
+        self.frame_timer = QTimer(self)
+        self.frame_timer.timeout.connect(self.next_frame)
+
+        self.move_timer = QTimer(self)
+        self.move_timer.timeout.connect(self.start_random_move)
+
+        self.action_timer = QTimer(self)
+        self.action_timer.timeout.connect(self.perform_random_action)
+
+        self.action_duration_timer = QTimer(self)
+        self.action_duration_timer.timeout.connect(self.end_current_action)
+
+        self.fall_timer = QTimer(self)
+        self.fall_timer.timeout.connect(self.fall)
+
+        self.interaction_timer = QTimer(self)
+        self.interaction_timer.timeout.connect(self.interact_with_others)
+        self.interaction_timer.start(5000)  # 5초마다 상호작용 시도
+
+        self.set_listening_state_signal.connect(self._set_listening_state)
+        self.create_context_menu()
+
+    def create_context_menu(self):
+        self.context_menu = QMenu(self)
+        toggle_action = self.context_menu.addAction("음성 인식 토글")
+        toggle_action.triggered.connect(self.toggle_voice_recognition.emit)
+        sit_action = self.context_menu.addAction("앉기")
+        sit_action.triggered.connect(self.sit)
+        idle_action = self.context_menu.addAction("기본 상태")
+        idle_action.triggered.connect(self.idle)
+        fall_action = self.context_menu.addAction("떨어지기")
+        fall_action.triggered.connect(self.start_fall)
+        exit_action = self.context_menu.addAction("제거")
+        exit_action.triggered.connect(self.close)
+
+    def load_images(self):
+        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+        self.idle_image = self.load_and_cache_image(os.path.join(image_folder, "idle.png"))
+        self.move_images = [self.load_and_cache_image(os.path.join(image_folder, f"move{i}.png")) for i in range(1, 4)]
+        self.drag_images = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 4)]
+        self.listen_image = self.load_and_cache_image(os.path.join(image_folder, "listen.png"))
+        self.sit_image = self.load_and_cache_image(os.path.join(image_folder, "sit.png"))
+        self.fall_images = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 4)]
+        self.current_image = self.idle_image
+        self.resize(QPixmap.fromImage(self.current_image).size())
+
+    def load_and_cache_image(self, path):
+        if path not in self.image_cache:
+            image = QImage(path)
+            scaled_image = image.scaled(
+                image.width() * 0.75,
+                image.height() * 0.75,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self.image_cache[path] = scaled_image
+        return self.image_cache[path]
+
+    def start_auto_move(self):
+        if not self.is_listening:
+            self.move_timer.start(random.randint(3000, 10000))
+
+    def stop_auto_move(self):
+        self.move_timer.stop()
+        if self.animation:
+            self.animation.stop()
+        self.is_moving = False
+        self.frame_timer.stop()
+
+    def start_random_move(self):
+        if not self.is_dragging:
+            self.animate()
+
+    def animate(self):
+        if self.animation is None or self.animation.state() == QPropertyAnimation.Stopped:
+            self.animation = QPropertyAnimation(self, b"pos")
+            self.animation.setDuration(3000)
+            start_pos = self.pos()
+            self.animation.setStartValue(start_pos)
+
+            screen = QApplication.primaryScreen().geometry()
+            max_distance = 100
+            new_x = max(0, min(start_pos.x() + random.randint(-max_distance, max_distance), screen.width() - self.width()))
+            new_y = max(0, min(start_pos.y() + random.randint(-max_distance, max_distance), screen.height() - self.height()))
+
+            self.animation.setEndValue(QPoint(new_x, new_y))
+            self.animation.setEasingCurve(QEasingCurve.InOutQuad)
+            self.animation.finished.connect(self.animationFinished)
+            self.animation.start()
+            self.current_action = "move"
+            self.is_moving = True
+            self.frame_timer.start(100)
+            self.facing_right = new_x > start_pos.x()
+
+    def animationFinished(self):
+        self.is_moving = False
+        self.current_image = self.idle_image
+        self.frame_timer.stop()
+        self.update()
+
+    def next_frame(self):
+        if self.is_moving:
+            self.current_frame = (self.current_frame + 1) % len(self.move_images)
+            self.current_image = self.move_images[self.current_frame]
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        if self.falling:
+            painter.drawPixmap(self.rect(), QPixmap.fromImage(self.current_image))
+        elif self.facing_right and not self.is_dragging:
+            flipped_image = self.current_image.mirrored(True, False)
+            painter.drawPixmap(self.rect(), QPixmap.fromImage(flipped_image))
+        else:
+            painter.drawPixmap(self.rect(), QPixmap.fromImage(self.current_image))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.offset = event.pos()
+            self.is_dragging = True
+            self.stop_auto_move()
+            self.current_image = self.drag_images[0]
+            self.update()
+        elif event.button() == Qt.RightButton:
+            self.show_context_menu(event.pos())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            new_pos = self.mapToParent(event.pos() - self.offset)
+            self.move(new_pos)
+            self.update_drag_image(new_pos)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.is_dragging = False
+            self.current_image = self.idle_image
+            self.update()
+            self.start_auto_move()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.start_fall()
+
+    def update_drag_image(self, new_pos):
+        if new_pos.x() < self.last_pos.x():
+            self.current_image = self.drag_images[2]
+            self.facing_right = False
+        elif new_pos.x() > self.last_pos.x():
+            self.current_image = self.drag_images[1]
+            self.facing_right = True
+        else:
+            self.current_image = self.drag_images[0]
+        self.last_pos = new_pos
+        self.update()
+
+    def show_context_menu(self, pos):
+        self.context_menu.exec_(self.mapToGlobal(pos))
+
+    def closeEvent(self, event):
+        self.exit_signal.emit()
+        super().closeEvent(event)
+
+    def sit(self):
+        self.stop_auto_move()
+        self.current_action = "sit"
+        self.current_image = self.sit_image
+        self.update()
+
+    def idle(self):
+        self.current_action = "idle"
+        self.current_image = self.idle_image
+        self.update()
+        self.start_auto_move()
+
+    def _set_listening_state(self, is_listening):
+        self.is_listening = is_listening
+        if is_listening:
+            self.current_image = self.listen_image
+            self.stop_auto_move()
+            self.action_timer.stop()
+            self.action_duration_timer.stop()
+        else:
+            self.current_image = self.idle_image
+            self.start_auto_move()
+            self.action_timer.start(random.randint(15000, 45000))
+        self.update()
+
+    def perform_random_action(self):
+        if not self.is_listening and not self.is_dragging:
+            action = random.choice(["idle", "move", "sit"])
+            if action == "move":
+                self.start_random_move()
+            elif action == "sit":
+                self.sit()
+                duration = random.randint(3000, 8000)
+                self.action_duration_timer.start(duration)
+            else:
+                self.idle()
+
+        self.action_timer.start(random.randint(15000, 45000))
+
+    def end_current_action(self):
+        self.action_duration_timer.stop()
+        self.idle()
+
+    def start_fall(self):
+        if not self.falling:
+            self.falling = True
+            self.stop_auto_move()
+            self.fall_frame = 0
+            self.fall_timer.start(50)
+
+    def fall(self):
+        if not self.falling:
+            return
+
+        screen = QApplication.primaryScreen().geometry()
+        current_pos = self.pos()
+        new_pos = QPoint(current_pos.x(), current_pos.y() + 10)
+
+        if new_pos.y() + self.height() > screen.height():
+            self.falling = False
+            self.fall_timer.stop()
+            new_pos.setY(screen.height() - self.height())
+            self.current_image = self.idle_image
+            self.start_auto_move()
+        else:
+            self.fall_frame = (self.fall_frame + 1) % len(self.fall_images)
+            self.current_image = self.fall_images[self.fall_frame]
+
+        self.move(new_pos)
+        self.update()
+
+    def interact_with_others(self):
+        if self.parent() and hasattr(self.parent(), 'character_widgets'):
+            others = [char for char in self.parent().character_widgets if char != self]
+            if others:
+                target = random.choice(others)
+                self.move_towards(target.pos())
+
+    def move_towards(self, target_pos):
+        if self.falling or self.is_dragging:
+            return
+
+        current_pos = self.pos()
+        dx = target_pos.x() - current_pos.x()
+        dy = target_pos.y() - current_pos.y()
+        distance = (dx**2 + dy**2)**0.5
+        
+        if distance > 5:
+            speed = 5
+            ratio = speed / distance
+            new_x = current_pos.x() + dx * ratio
+            new_y = current_pos.y() + dy * ratio
+            self.move(QPoint(int(new_x), int(new_y)))
+            self.current_image = self.move_images[self.current_frame]
+            self.current_frame = (self.current_frame + 1) % len(self.move_images)
+            self.update()
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -878,7 +1203,6 @@ class MainWindow(QMainWindow):
         # 여기에 캐릭터를 추가하는 코드를 넣습니다.
         self.tray_icon.add_character()
 
-        self.characters = []
         self.initUI()
 
     def initUI(self):
@@ -907,16 +1231,8 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        for character in self.characters:
-            character.close()
+        self.tray_icon.exit_with_farewell()
         event.ignore()
-        self.hide()
-        self.tray_icon.showMessage(
-            "Ari",
-            "Ari가 시스템 트레이에서 실행 중입니다.",
-            QSystemTrayIcon.Information,
-            2000,
-        )
 
 
 def main():
