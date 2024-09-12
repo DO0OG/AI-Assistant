@@ -1,0 +1,10 @@
+pycaw
+keyboard
+whisper
+SpeechRecognition
+PySide6
+pydub
+torch
+selenium
+webdriver_manager
+transformers
