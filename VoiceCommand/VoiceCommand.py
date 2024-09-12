@@ -1206,7 +1206,6 @@ class MainWindow(QMainWindow):
         self.tray_icon = SystemTrayIcon(QIcon(icon_path), self)
         self.tray_icon.show()
 
-        # 여기에 캐릭터를 추가하는 코드를 넣습니다.
         self.tray_icon.add_character()
 
         self.initUI()
@@ -1237,8 +1236,8 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        self.tray_icon.exit_with_farewell()
         event.ignore()
+        self.hide()
 
 
 def main():
