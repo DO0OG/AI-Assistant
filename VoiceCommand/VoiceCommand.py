@@ -20,7 +20,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 import time
 import warnings
 import gc
-
+import psutil
 import whisper
 import speech_recognition as sr
 import torch
@@ -691,10 +691,14 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         self.activated.connect(self.on_tray_icon_activated)
 
-        # 주기적으로 GC를 호출하는 타이머 설정
-        self.gc_timer = QTimer(self)
-        self.gc_timer.timeout.connect(self.run_gc)
-        self.gc_timer.start(30000)  # 30초마다 GC 실행
+        self.memory_threshold = 75  # 메모리 사용량 임계값 (%)
+        self.check_interval = 60000  # 기본 체크 간격: 1분
+        self.last_memory_usage = psutil.virtual_memory().percent
+
+        # 메모리 모니터링 타이머 설정
+        self.memory_check_timer = QTimer(self)
+        self.memory_check_timer.timeout.connect(self.check_memory_usage)
+        self.memory_check_timer.start(self.check_interval)
 
         try:
             self.ai_assistant = get_ai_assistant()
@@ -703,9 +707,24 @@ class SystemTrayIcon(QSystemTrayIcon):
             print(f"AI 어시스턴트 초기화 실패: {str(e)}")
             self.ai_assistant = None
 
+    def check_memory_usage(self):
+        current_memory = psutil.virtual_memory().percent
+        memory_increase = current_memory - self.last_memory_usage
+
+        if current_memory > self.memory_threshold or memory_increase > 10:
+            self.run_gc()
+            self.check_interval = min(self.check_interval, 30000)  # 최소 30초 간격
+        else:
+            self.check_interval = min(self.check_interval * 2, 300000)  # 최대 5분 간격
+
+        self.last_memory_usage = current_memory
+        self.memory_check_timer.setInterval(self.check_interval)
+
     def run_gc(self):
+        before_memory = psutil.virtual_memory().percent
         gc.collect()
-        logging.info("가비지 컬렉션 실행됨")
+        after_memory = psutil.virtual_memory().percent
+        logging.info(f"가비지 컬렉션 실행: 메모리 사용량 {before_memory}% -> {after_memory}%")
 
     def start_listening(self):
         for character in self.character_widgets:
