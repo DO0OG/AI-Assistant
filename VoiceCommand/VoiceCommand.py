@@ -524,6 +524,9 @@ class CharacterWidget(QWidget):
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
 
+    def set_listening_state(self, is_listening):
+        self.set_listening_state_signal.emit(is_listening)
+
     def perform_random_action(self):
         if not self.is_listening and not self.is_dragging:
             action = random.choice(["idle", "move", "sit"])
@@ -585,7 +588,7 @@ class CharacterWidget(QWidget):
         dx = target_pos.x() - current_pos.x()
         dy = target_pos.y() - current_pos.y()
         distance = (dx**2 + dy**2)**0.5
-        
+
         if distance > 5:
             speed = 5
             ratio = speed / distance
@@ -1117,6 +1120,9 @@ class CharacterWidget(QWidget):
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
 
+    def set_listening_state(self, is_listening):
+        self.set_listening_state_signal.emit(is_listening)
+
     def perform_random_action(self):
         if not self.is_listening and not self.is_dragging:
             action = random.choice(["idle", "move", "sit"])
@@ -1178,7 +1184,7 @@ class CharacterWidget(QWidget):
         dx = target_pos.x() - current_pos.x()
         dy = target_pos.y() - current_pos.y()
         distance = (dx**2 + dy**2)**0.5
-        
+
         if distance > 5:
             speed = 5
             ratio = speed / distance
