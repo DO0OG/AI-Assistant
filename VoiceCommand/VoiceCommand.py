@@ -121,6 +121,7 @@ class ModelLoadingThread(QThread):
                 tts_model = TTS(language="KR", device=device)
                 speaker_ids = tts_model.hps.data.spk2id
 
+            self.progress.emit("Whisper 모델 로딩 중...")
             whisper_model = whisper.load_model("medium", device=device)
 
             logging.info("TTS 및 Whisper 모델 로딩 완료. " + device)
@@ -193,12 +194,15 @@ def search_and_play_youtube(query, play=True):
     search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
     try:
         options = webdriver.ChromeOptions()
-        options.add_argument("--headless")
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        options.add_argument("--headless")  # 브라우저를 표시하지 않음
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()), options=options
+        )
 
         driver.get(search_url)
-        time.sleep(2)
+        time.sleep(2)  # 페이지 로딩을 위해 잠시 대기
 
+        # 동영상 링크 찾기
         video_link = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a#video-title"))
         )
@@ -206,20 +210,18 @@ def search_and_play_youtube(query, play=True):
         first_video_link = video_link.get_attribute("href")
         driver.quit()
 
-        if play:
+        if play == True:
             webbrowser.open(first_video_link)
-            text_to_speech(f"{query}에 대한 첫 번째 유튜브 영상을 재생합니다.")
+            text_to_speech(f"{query}에 대한 첫 번째 유튜브 영상을 열었습니다.")
+            logging.info(f"유튜브 영상 열기: {first_video_link}")
         else:
             webbrowser.open(search_url)
             text_to_speech(f"{query}에 대한 유튜브 검색 결과를 열었습니다.")
-        
-        logging.info(f"유튜브 {'재생' if play else '검색'}: {query}")
-        return True
+            logging.info(f"유튜브 검색 결과 열기: {search_url}")
     except Exception as e:
         logging.error(f"유튜브 검색 중 오류 발생: {str(e)}")
         text_to_speech("유튜브 검색 중 오류가 발생했습니다.")
         webbrowser.open(search_url)
-        return False
 
 
 def execute_command(command):
@@ -230,36 +232,38 @@ def execute_command(command):
 
     if "열어줘" in command:
         site = command.split("열어줘")[0].strip()
+
+        # 사이트 이름을 매핑된 값으로 변환
         site_key = site_mapping.get(site, site)
-        open_website(f"https://www.{site_key}.com" if site_key else "https://www.google.com")
+
+        open_website(
+            f"https://www.{site_key}.com" if site_key else "https://www.google.com"
+        )
         text_to_speech("브라우저를 열었습니다.")
-        return True
     elif "유튜브" in command and ("재생" in command or "검색" in command):
-        query = command.split("유튜브")[1].split("재생" if "재생" in command else "검색")[0].strip()
-        return search_and_play_youtube(query, play="재생" in command)
+        query = (
+            command.split("유튜브")[1]
+            .split("재생" if "재생" in command else "검색")[0]
+            .strip()
+        )
+        search_and_play_youtube(query, play="재생" in command)
     elif "볼륨 키우기" in command or "볼륨 올려" in command:
         adjust_volume(0.1)
         text_to_speech("볼륨을 높였습니다.")
-        return True
     elif "볼륨 줄이기" in command or "볼륨 내려" in command:
         adjust_volume(-0.1)
         text_to_speech("볼륨을 낮췄습니다.")
-        return True
     elif "음소거" in command:
         volume.SetMute(1, None)
         text_to_speech("음소거 되었습니다.")
-        return True
     elif "음소거 해제" in command:
         volume.SetMute(0, None)
         text_to_speech("음소거가 해제되었습니다.")
-        return True
     elif "타이머" in command:
         set_timer_from_command(command)
-        return True
     elif "전원 끄기" in command or "컴퓨터 끄기" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
-        return True
     elif "분 뒤에 전원 꺼줘" in command or "분 후에 전원 꺼줘" in command:
         set_shutdown_timer_from_command(command)
     else:
@@ -593,7 +597,7 @@ class CharacterWidget(QWidget):
         self.update()
 
     def interact_with_others(self):
-        if self.parent() and hasattr(self.parent(), 'character_widgets'):
+        if self.parent() and hasattr(self.parent(), "character_widgets"):
             others = [char for char in self.parent().character_widgets if char != self]
             if others:
                 target = random.choice(others)
@@ -606,7 +610,7 @@ class CharacterWidget(QWidget):
         current_pos = self.pos()
         dx = target_pos.x() - current_pos.x()
         dy = target_pos.y() - current_pos.y()
-        distance = (dx**2 + dy**2)**0.5
+        distance = (dx**2 + dy**2) ** 0.5
 
         if distance > 5:
             speed = 5
@@ -710,19 +714,6 @@ class SystemTrayIcon(QSystemTrayIcon):
 
         self.voice_thread = None  # voice_thread 속성 추가
 
-        # 명령어 목록 정의
-        self.command_list = [
-            "열어줘",
-            "유튜브",
-            "볼륨 키우기", "볼륨 올려",
-            "볼륨 줄이기", "볼륨 내려",
-            "음소거",
-            "음소거 해제",
-            "타이머",
-            "전원 끄기", "컴퓨터 끄기",
-            "분 뒤에 전원 꺼줘", "분 후에 전원 꺼줘"
-        ]
-
     def set_voice_thread(self, thread):
         self.voice_thread = thread
 
@@ -759,9 +750,6 @@ class SystemTrayIcon(QSystemTrayIcon):
         if "종료" in command:
             logging.info("프로그램을 종료합니다.")
             self.exit_with_farewell()
-        elif any(cmd in command for cmd in self.command_list):
-            # 명령어 목록에 있는 명령어 실행
-            execute_command(command)
         else:
             if self.ai_assistant is not None:
                 try:
@@ -771,14 +759,17 @@ class SystemTrayIcon(QSystemTrayIcon):
                         text_to_speech(response)
                     else:
                         logging.error("AI 응답이 비어 있습니다.")
-                        text_to_speech("죄송합니다. 응답을 생성하는 데 문제가 있었습니다.")
+                        text_to_speech(
+                            "죄송합니다. 응답을 생성하는 데 문제가 있었습니다."
+                        )
                 except Exception as e:
                     logging.error(f"AI 응답 처리 중 오류 발생: {str(e)}")
-                    text_to_speech("죄송합니다. 응답을 처리하는 데 문제가 발생했습니다.")
+                    text_to_speech(
+                        "죄송합니다. 응답을 처리하는 데 문제가 발생했습니다."
+                    )
             else:
                 logging.error("AI 어시스턴트가 초기화되지 않았습니다.")
                 text_to_speech("죄송합니다. AI 어시스턴트를 사용할 수 없습니다.")
-
         for character in self.character_widgets:
             character.set_listening_state(False)
         self.animation_timer.start(random.randint(3000, 10000))
@@ -802,13 +793,20 @@ class SystemTrayIcon(QSystemTrayIcon):
         if len(self.character_widgets) < self.max_characters:
             character = CharacterWidget(self.parent())
             character.show()
-            character.exit_signal.connect(lambda: self.remove_specific_character(character))
+            character.exit_signal.connect(
+                lambda: self.remove_specific_character(character)
+            )
             self.character_widgets.append(character)
             self.remove_character_action.setEnabled(True)
             if len(self.character_widgets) == self.max_characters:
                 self.add_character_action.setEnabled(False)
         else:
-            self.showMessage("Ari", f"최대 캐릭터 수({self.max_characters}마리)에 도달했습니다.", QSystemTrayIcon.Information, 2000)
+            self.showMessage(
+                "Ari",
+                f"최대 캐릭터 수({self.max_characters}마리)에 도달했습니다.",
+                QSystemTrayIcon.Information,
+                2000,
+            )
 
     def remove_character(self):
         if self.character_widgets:
@@ -838,48 +836,6 @@ class SystemTrayIcon(QSystemTrayIcon):
     def start_random_move(self):
         for character in self.character_widgets:
             character.start_random_move()
-
-def execute_command(command):
-    logging.info(f"실행할 명령: {command}")
-
-    # 사이트 매핑 정의
-    site_mapping = {
-        "네이버": "naver",
-        "구글": "google",
-        "다음": "daum",
-        "유튜브": "youtube"
-    }
-
-    if "열어줘" in command:
-        site = command.split("열어줘")[0].strip()
-        site_key = site_mapping.get(site, site)
-        open_website(f"https://www.{site_key}.com" if site_key else "https://www.google.com")
-        text_to_speech("브라우저를 열었습니다.")
-    elif "유튜브" in command and ("재생" in command or "검색" in command):
-        query = command.split("유튜브")[1].split("재생" if "재생" in command else "검색")[0].strip()
-        search_and_play_youtube(query, play="재생" in command)
-    elif "볼륨 키우기" in command or "볼륨 올려" in command:
-        adjust_volume(0.1)
-        text_to_speech("볼륨을 높였습니다.")
-    elif "볼륨 줄이기" in command or "볼륨 내려" in command:
-        adjust_volume(-0.1)
-        text_to_speech("볼륨을 낮췄습니다.")
-    elif "음소거" in command:
-        volume.SetMute(1, None)
-        text_to_speech("음소거 되었습니다.")
-    elif "음소거 해제" in command:
-        volume.SetMute(0, None)
-        text_to_speech("음소거가 해제되었습니다.")
-    elif "타이머" in command:
-        set_timer_from_command(command)
-    elif "전원 끄기" in command or "컴퓨터 끄기" in command:
-        text_to_speech("컴퓨터를 종료합니다.")
-        shutdown_computer()
-    elif "분 뒤에 전원 꺼줘" in command or "분 후에 전원 꺼줘" in command:
-        set_shutdown_timer_from_command(command)
-    else:
-        return False
-    return True
 
 
 class VoiceRecognitionThread(QThread):
@@ -916,7 +872,7 @@ class VoiceRecognitionThread(QThread):
                 access_key=self.access_key,
                 keyword_paths=[self.keyword_path],
                 model_path=self.model_path,
-                sensitivities=[0.5]
+                sensitivities=[0.5],
             )
             logging.info("Porcupine 초기화 완료")
 
@@ -977,7 +933,9 @@ class VoiceRecognitionThread(QThread):
         for index, name in enumerate(sr.Microphone.list_microphone_names()):
             if device_name in name:
                 return index
-        logging.warning(f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다.")
+        logging.warning(
+            f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다."
+        )
         return None
 
     def recognize_speech(self):
@@ -985,21 +943,11 @@ class VoiceRecognitionThread(QThread):
         try:
             with sr.Microphone(device_index=self.microphone_index) as source:
                 logging.info("말씀해 주세요...")
-                r.adjust_for_ambient_noise(source, duration=0.5)
-                audio = r.listen(source, timeout=10, phrase_time_limit=10)
+                audio = r.listen(source, timeout=5, phrase_time_limit=5)
 
             text = r.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
-
-            command_executed = execute_command(text)
-            if not command_executed:
-                logging.info("명령어가 없습니다. AI 응답을 생성합니다.")
-                ai_response = get_ai_assistant(text)
-                logging.info(f"AI 응답: {ai_response}")
-                text_to_speech(ai_response)
-            else:
-                logging.info("명령어가 실행되었습니다.")
         except sr.UnknownValueError:
             logging.warning("음성을 인식할 수 없습니다.")
         except sr.RequestError as e:
@@ -1085,13 +1033,33 @@ class CharacterWidget(QWidget):
         exit_action.triggered.connect(self.close)
 
     def load_images(self):
-        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-        self.idle_images = [self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png")) for i in range(1, 9)]
-        self.walk_images = [self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png")) for i in range(1, 10)]
-        self.drag_images = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)]
-        self.listen_images = [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)]
-        self.sit_images = [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)]
-        self.fall_images = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+        image_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "images"
+        )
+        self.idle_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png"))
+            for i in range(1, 9)
+        ]
+        self.walk_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png"))
+            for i in range(1, 10)
+        ]
+        self.drag_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
+            for i in range(1, 9)
+        ]
+        self.listen_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
+            for i in range(1, 10)
+        ]
+        self.sit_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
+            for i in range(1, 10)
+        ]
+        self.fall_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
+            for i in range(1, 9)
+        ]
         self.current_image = self.idle_images[0]
         self.resize(QPixmap.fromImage(self.current_image).size())
 
@@ -1118,11 +1086,11 @@ class CharacterWidget(QWidget):
         self.is_moving = False
 
     def start_random_move(self):
-        if not self.is_dragging:
+        if not self.is_dragging and not self.is_listening and self.current_action != "sit":
             self.animate()
 
     def animate(self):
-        if self.animation is None or self.animation.state() == QPropertyAnimation.Stopped:
+        if (self.animation is None or self.animation.state() == QPropertyAnimation.Stopped) and not self.is_listening and self.current_action != "sit":
             self.animation = QPropertyAnimation(self, b"pos")
             self.animation.setDuration(3000)
             start_pos = self.pos()
@@ -1130,8 +1098,20 @@ class CharacterWidget(QWidget):
 
             screen = QApplication.primaryScreen().geometry()
             max_distance = 100
-            new_x = max(0, min(start_pos.x() + random.randint(-max_distance, max_distance), screen.width() - self.width()))
-            new_y = max(0, min(start_pos.y() + random.randint(-max_distance, max_distance), screen.height() - self.height()))
+            new_x = max(
+                0,
+                min(
+                    start_pos.x() + random.randint(-max_distance, max_distance),
+                    screen.width() - self.width(),
+                ),
+            )
+            new_y = max(
+                0,
+                min(
+                    start_pos.y() + random.randint(-max_distance, max_distance),
+                    screen.height() - self.height(),
+                ),
+            )
 
             self.animation.setEndValue(QPoint(new_x, new_y))
             self.animation.setEasingCurve(QEasingCurve.InOutQuad)
@@ -1153,7 +1133,7 @@ class CharacterWidget(QWidget):
         elif self.is_dragging:
             self.current_frame = (self.current_frame + 1) % len(self.drag_images)
             self.current_image = self.drag_images[self.current_frame]
-        elif self.is_moving:
+        elif self.is_moving and not self.is_listening:
             self.current_frame = (self.current_frame + 1) % len(self.walk_images)
             self.current_image = self.walk_images[self.current_frame]
         elif self.current_action == "sit" or self.is_listening:
@@ -1230,11 +1210,13 @@ class CharacterWidget(QWidget):
     def _set_listening_state(self, is_listening):
         self.is_listening = is_listening
         if is_listening:
-            self.current_image = self.listen_images[0]
+            self.current_action = "sit"
+            self.current_image = self.sit_images[0]
             self.stop_auto_move()
             self.action_timer.stop()
             self.action_duration_timer.stop()
         else:
+            self.current_action = "idle"
             self.current_image = self.idle_images[0]
             self.start_auto_move()
             self.action_timer.start(random.randint(15000, 45000))
@@ -1244,7 +1226,7 @@ class CharacterWidget(QWidget):
         self.set_listening_state_signal.emit(is_listening)
 
     def perform_random_action(self):
-        if not self.is_listening and not self.is_dragging:
+        if not self.is_listening and not self.is_dragging and self.current_action != "sit":
             action = random.choice(["idle", "walk", "sit"])
             if action == "walk":
                 self.start_random_move()
@@ -1255,7 +1237,8 @@ class CharacterWidget(QWidget):
             else:
                 self.idle()
 
-        self.action_timer.start(random.randint(15000, 45000))
+        if not self.is_listening and self.current_action != "sit":
+            self.action_timer.start(random.randint(15000, 45000))
 
     def end_current_action(self):
         self.action_duration_timer.stop()
@@ -1280,24 +1263,24 @@ class CharacterWidget(QWidget):
             self.falling = False
             new_pos.setY(screen.height() - self.height())
             self.start_auto_move()
-        
+
         self.move(new_pos)
 
     def interact_with_others(self):
-        if self.parent() and hasattr(self.parent(), 'character_widgets'):
+        if self.parent() and hasattr(self.parent(), "character_widgets"):
             others = [char for char in self.parent().character_widgets if char != self]
             if others:
                 target = random.choice(others)
                 self.move_towards(target.pos())
 
     def move_towards(self, target_pos):
-        if self.falling or self.is_dragging:
+        if self.falling or self.is_dragging or self.is_listening or self.current_action == "sit":
             return
 
         current_pos = self.pos()
         dx = target_pos.x() - current_pos.x()
         dy = target_pos.y() - current_pos.y()
-        distance = (dx**2 + dy**2)**0.5
+        distance = (dx**2 + dy**2) ** 0.5
 
         if distance > 5:
             speed = 5
@@ -1331,7 +1314,9 @@ class MainWindow(QMainWindow):
         self.model_loading_thread = ModelLoadingThread()
         self.model_loading_thread.finished.connect(self.on_model_loaded)
         self.model_loading_thread.start()
-        self.tray_icon.showMessage("Ari", "TTS 및 Whisper 모델 로딩 중...", QSystemTrayIcon.Information, 3000)
+        self.tray_icon.showMessage(
+            "Ari", "TTS 및 Whisper 모델 로딩 중...", QSystemTrayIcon.Information, 3000
+        )
 
     def initUI(self):
         self.microphone_label = QLabel("마이크 선택:", self)
@@ -1348,7 +1333,7 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         selected_microphone = self.microphone_combo.currentText()
         logging.info(f"선택된 마이크: {selected_microphone}")
-        if hasattr(self, 'voice_thread') and self.voice_thread:
+        if hasattr(self, "voice_thread") and self.voice_thread:
             self.voice_thread.selected_microphone = selected_microphone
             self.voice_thread.init_microphone()
         self.hide()
@@ -1411,6 +1396,7 @@ def main():
     except Exception as e:
         logging.error(f"예외 발생: {str(e)}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     setup_logging()
