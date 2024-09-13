@@ -92,15 +92,21 @@ volume = cast(interface, POINTER(IAudioEndpointVolume))
 
 # 로그 설정
 def setup_logging():
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                        filename='voice_command.log',
-                        filemode='w')
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
-    console.setFormatter(formatter)
-    logging.getLogger('').addHandler(console)
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"ari_log_{current_time}.log")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
 
 
 class ModelLoadingThread(QThread):
@@ -115,7 +121,6 @@ class ModelLoadingThread(QThread):
                 tts_model = TTS(language="KR", device=device)
                 speaker_ids = tts_model.hps.data.spk2id
 
-            self.progress.emit("Whisper 모델 로딩 중...")
             whisper_model = whisper.load_model("medium", device=device)
 
             logging.info("TTS 및 Whisper 모델 로딩 완료. " + device)
@@ -188,15 +193,12 @@ def search_and_play_youtube(query, play=True):
     search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
     try:
         options = webdriver.ChromeOptions()
-        options.add_argument("--headless")  # 브라우저를 표시하지 않음
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=options
-        )
+        options.add_argument("--headless")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
         driver.get(search_url)
-        time.sleep(2)  # 페이지 로딩을 위해 잠시 대기
+        time.sleep(2)
 
-        # 동영상 링크 찾기
         video_link = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a#video-title"))
         )
@@ -204,18 +206,20 @@ def search_and_play_youtube(query, play=True):
         first_video_link = video_link.get_attribute("href")
         driver.quit()
 
-        if play == True:
+        if play:
             webbrowser.open(first_video_link)
-            text_to_speech(f"{query}에 대한 첫 번째 유튜브 영상을 열었습니다.")
-            logging.info(f"유튜브 영상 열기: {first_video_link}")
+            text_to_speech(f"{query}에 대한 첫 번째 유튜브 영상을 재생합니다.")
         else:
             webbrowser.open(search_url)
             text_to_speech(f"{query}에 대한 유튜브 검색 결과를 열었습니다.")
-            logging.info(f"유튜브 검색 결과 열기: {search_url}")
+        
+        logging.info(f"유튜브 {'재생' if play else '검색'}: {query}")
+        return True
     except Exception as e:
         logging.error(f"유튜브 검색 중 오류 발생: {str(e)}")
         text_to_speech("유튜브 검색 중 오류가 발생했습니다.")
         webbrowser.open(search_url)
+        return False
 
 
 def execute_command(command):
@@ -226,42 +230,41 @@ def execute_command(command):
 
     if "열어줘" in command:
         site = command.split("열어줘")[0].strip()
-
-        # 사이트 이름을 매핑된 값으로 변환
         site_key = site_mapping.get(site, site)
-
-        open_website(
-            f"https://www.{site_key}.com" if site_key else "https://www.google.com"
-        )
+        open_website(f"https://www.{site_key}.com" if site_key else "https://www.google.com")
         text_to_speech("브라우저를 열었습니다.")
+        return True
     elif "유튜브" in command and ("재생" in command or "검색" in command):
-        query = (
-            command.split("유튜브")[1]
-            .split("재생" if "재생" in command else "검색")[0]
-            .strip()
-        )
-        search_and_play_youtube(query, play="재생" in command)
+        query = command.split("유튜브")[1].split("재생" if "재생" in command else "검색")[0].strip()
+        return search_and_play_youtube(query, play="재생" in command)
     elif "볼륨 키우기" in command or "볼륨 올려" in command:
         adjust_volume(0.1)
         text_to_speech("볼륨을 높였습니다.")
+        return True
     elif "볼륨 줄이기" in command or "볼륨 내려" in command:
         adjust_volume(-0.1)
         text_to_speech("볼륨을 낮췄습니다.")
+        return True
     elif "음소거" in command:
         volume.SetMute(1, None)
         text_to_speech("음소거 되었습니다.")
+        return True
     elif "음소거 해제" in command:
         volume.SetMute(0, None)
         text_to_speech("음소거가 해제되었습니다.")
+        return True
     elif "타이머" in command:
         set_timer_from_command(command)
+        return True
     elif "전원 끄기" in command or "컴퓨터 끄기" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
+        return True
     elif "분 뒤에 전원 꺼줘" in command or "분 후에 전원 꺼줘" in command:
         set_shutdown_timer_from_command(command)
-    else:
-        text_to_speech("알 수 없는 명령입니다.")
+        return True
+    
+    return False  # 명령어가 없는 경우 False 반환
 
 
 def adjust_volume(change):
@@ -695,7 +698,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.remove_character_action = self.menu.addAction("캐릭터 제거")
         self.remove_character_action.triggered.connect(self.remove_character)
         self.remove_character_action.setEnabled(False)
-        
+
         self.exit_action = self.menu.addAction("종료")
         self.exit_action.triggered.connect(self.exit)
 
@@ -704,6 +707,19 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.animation_timer.start(random.randint(3000, 10000))
 
         self.voice_thread = None  # voice_thread 속성 추가
+
+        # 명령어 목록 정의
+        self.command_list = [
+            "열어줘",
+            "유튜브",
+            "볼륨 키우기", "볼륨 올려",
+            "볼륨 줄이기", "볼륨 내려",
+            "음소거",
+            "음소거 해제",
+            "타이머",
+            "전원 끄기", "컴퓨터 끄기",
+            "분 뒤에 전원 꺼줘", "분 후에 전원 꺼줘"
+        ]
 
     def set_voice_thread(self, thread):
         self.voice_thread = thread
@@ -741,6 +757,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         if "종료" in command:
             logging.info("프로그램을 종료합니다.")
             self.exit_with_farewell()
+        elif any(cmd in command for cmd in self.command_list):
+            # 명령어 목록에 있는 명령어 실행
+            execute_command(command)
         else:
             if self.ai_assistant is not None:
                 try:
@@ -757,11 +776,10 @@ class SystemTrayIcon(QSystemTrayIcon):
             else:
                 logging.error("AI 어시스턴트가 초기화되지 않았습니다.")
                 text_to_speech("죄송합니다. AI 어시스턴트를 사용할 수 없습니다.")
+
         for character in self.character_widgets:
             character.set_listening_state(False)
-        self.animation_timer.start(
-            random.randint(3000, 10000)
-        )
+        self.animation_timer.start(random.randint(3000, 10000))
 
     def exit_with_farewell(self):
         farewells = ["안녕히 가세요.", "아리를 종료합니다."]
@@ -821,6 +839,48 @@ class SystemTrayIcon(QSystemTrayIcon):
     def start_random_move(self):
         for character in self.character_widgets:
             character.start_random_move()
+
+def execute_command(command):
+    logging.info(f"실행할 명령: {command}")
+
+    # 사이트 매핑 정의
+    site_mapping = {
+        "네이버": "naver",
+        "구글": "google",
+        "다음": "daum",
+        "유튜브": "youtube"
+    }
+
+    if "열어줘" in command:
+        site = command.split("열어줘")[0].strip()
+        site_key = site_mapping.get(site, site)
+        open_website(f"https://www.{site_key}.com" if site_key else "https://www.google.com")
+        text_to_speech("브라우저를 열었습니다.")
+    elif "유튜브" in command and ("재생" in command or "검색" in command):
+        query = command.split("유튜브")[1].split("재생" if "재생" in command else "검색")[0].strip()
+        search_and_play_youtube(query, play="재생" in command)
+    elif "볼륨 키우기" in command or "볼륨 올려" in command:
+        adjust_volume(0.1)
+        text_to_speech("볼륨을 높였습니다.")
+    elif "볼륨 줄이기" in command or "볼륨 내려" in command:
+        adjust_volume(-0.1)
+        text_to_speech("볼륨을 낮췄습니다.")
+    elif "음소거" in command:
+        volume.SetMute(1, None)
+        text_to_speech("음소거 되었습니다.")
+    elif "음소거 해제" in command:
+        volume.SetMute(0, None)
+        text_to_speech("음소거가 해제되었습니다.")
+    elif "타이머" in command:
+        set_timer_from_command(command)
+    elif "전원 끄기" in command or "컴퓨터 끄기" in command:
+        text_to_speech("컴퓨터를 종료합니다.")
+        shutdown_computer()
+    elif "분 뒤에 전원 꺼줘" in command or "분 후에 전원 꺼줘" in command:
+        set_shutdown_timer_from_command(command)
+    else:
+        return False
+    return True
 
 
 class VoiceRecognitionThread(QThread):
@@ -923,11 +983,21 @@ class VoiceRecognitionThread(QThread):
         try:
             with sr.Microphone(device_index=self.microphone_index) as source:
                 logging.info("말씀해 주세요...")
-                audio = r.listen(source, timeout=5, phrase_time_limit=5)
+                r.adjust_for_ambient_noise(source, duration=0.5)
+                audio = r.listen(source, timeout=10, phrase_time_limit=10)
 
             text = r.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
+            
+            command_executed = execute_command(text)
+            if not command_executed:
+                logging.info("명령어가 없습니다. AI 응답을 생성합니다.")
+                ai_response = get_ai_assistant(text)
+                logging.info(f"AI 응답: {ai_response}")
+                text_to_speech(ai_response)
+            else:
+                logging.info("명령어가 실행되었습니다.")
         except sr.UnknownValueError:
             logging.warning("음성을 인식할 수 없습니다.")
         except sr.RequestError as e:
@@ -1364,8 +1434,6 @@ if __name__ == "__main__":
     # 음성 인식 결과 처리
     def handle_voice_result(text):
         logging.info(f"인식된 명령: {text}")
-        response = ai_assistant.process_query(text)
-        text_to_speech(response)
 
     voice_thread.result.connect(handle_voice_result)
     voice_thread.listening_state_changed.connect(
