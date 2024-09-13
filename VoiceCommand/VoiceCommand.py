@@ -271,7 +271,7 @@ def execute_command(command):
     elif "전원 끄기" in command or "컴퓨터 끄기" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
-    elif "분 뒤에 컴퓨터 꺼줘" in command or "분 후에 컴퓨터 꺼줘" in command:
+    elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
         set_shutdown_timer_from_command(command)
     else:
         response = ai_assistant.process_query(command)
@@ -296,7 +296,6 @@ def set_shutdown_timer_from_command(command):
     try:
         minutes = int("".join(filter(str.isdigit, command)))
         set_shutdown_timer(minutes)
-        text_to_speech(f"{minutes}분 후에 컴퓨터를 종료합니다.")
     except ValueError:
         text_to_speech("종료 시간을 정확히 말씀해 주세요.")
 
