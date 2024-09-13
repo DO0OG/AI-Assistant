@@ -28,6 +28,7 @@ import torch
 import pvporcupine
 import pyaudio
 import struct
+import ctypes
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -57,6 +58,11 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap, QAction, QImage, QPen, QColo
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
+
+try:
+    ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
+except:
+    pass
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["SDL_VIDEODRIVER"] = "dummy"
@@ -1305,7 +1311,7 @@ class CharacterWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ari Voice Command - 마이크 설정")
+        self.setWindowTitle("Ari Voice Command")
         self.setGeometry(100, 100, 300, 250)
         self.setFixedSize(300, 200)
 
