@@ -1026,7 +1026,7 @@ class CharacterWidget(QWidget):
         sit_action = self.context_menu.addAction("앉기")
         sit_action.triggered.connect(self.sit)
         idle_action = self.context_menu.addAction("기본 상태")
-        idle_action.triggered.connect(self.idle)
+        idle_action.triggered.connect(self.return_to_idle)  # idle() 대신 return_to_idle() 사용
         fall_action = self.context_menu.addAction("떨어지기")
         fall_action.triggered.connect(self.start_fall)
         exit_action = self.context_menu.addAction("제거")
@@ -1086,11 +1086,11 @@ class CharacterWidget(QWidget):
         self.is_moving = False
 
     def start_random_move(self):
-        if not self.is_dragging and not self.is_listening and self.current_action != "sit":
+        if not self.is_dragging and not self.is_listening and self.current_action != "sit" and not self.falling:
             self.animate()
 
     def animate(self):
-        if (self.animation is None or self.animation.state() == QPropertyAnimation.Stopped) and not self.is_listening and self.current_action != "sit":
+        if (self.animation is None or self.animation.state() == QPropertyAnimation.Stopped) and not self.is_listening and self.current_action != "sit" and not self.falling:
             self.animation = QPropertyAnimation(self, b"pos")
             self.animation.setDuration(3000)
             start_pos = self.pos()
@@ -1159,6 +1159,8 @@ class CharacterWidget(QWidget):
             self.offset = event.pos()
             self.is_dragging = True
             self.stop_auto_move()
+            if self.current_action == "sit":
+                self.return_to_idle()  # 앉아있는 상태에서 드래그 시 idle 상태로 변경
             self.current_image = self.drag_images[0]
             self.update()
         elif event.button() == Qt.RightButton:
@@ -1173,8 +1175,7 @@ class CharacterWidget(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.is_dragging = False
-            self.current_image = self.idle_images[0]
-            self.update()
+            self.return_to_idle()  # 드래그 종료 시 idle 상태로 변경
             self.start_auto_move()
 
     def mouseDoubleClickEvent(self, event):
@@ -1200,12 +1201,17 @@ class CharacterWidget(QWidget):
         self.current_action = "sit"
         self.current_image = self.sit_images[0]
         self.update()
+        self.action_timer.stop()  # 앉아있는 동안 자동 행동 타이머 중지
 
     def idle(self):
+        self.return_to_idle()
+        self.start_auto_move()
+
+    def return_to_idle(self):
         self.current_action = "idle"
         self.current_image = self.idle_images[0]
         self.update()
-        self.start_auto_move()
+        self.action_timer.start(random.randint(15000, 45000))  # 자동 행동 타이머 재시작
 
     def _set_listening_state(self, is_listening):
         self.is_listening = is_listening
@@ -1226,7 +1232,7 @@ class CharacterWidget(QWidget):
         self.set_listening_state_signal.emit(is_listening)
 
     def perform_random_action(self):
-        if not self.is_listening and not self.is_dragging and self.current_action != "sit":
+        if not self.is_listening and not self.is_dragging and self.current_action != "sit" and not self.falling:
             action = random.choice(["idle", "walk", "sit"])
             if action == "walk":
                 self.start_random_move()
@@ -1235,9 +1241,9 @@ class CharacterWidget(QWidget):
                 duration = random.randint(3000, 8000)
                 self.action_duration_timer.start(duration)
             else:
-                self.idle()
+                self.return_to_idle()  # idle() 대신 return_to_idle() 사용
 
-        if not self.is_listening and self.current_action != "sit":
+        if not self.is_listening and self.current_action != "sit" and not self.falling:
             self.action_timer.start(random.randint(15000, 45000))
 
     def end_current_action(self):
@@ -1245,7 +1251,7 @@ class CharacterWidget(QWidget):
         self.idle()
 
     def start_fall(self):
-        if not self.falling:
+        if not self.falling and self.current_action != "sit":
             self.falling = True
             self.stop_auto_move()
             self.fall_frame = 0
@@ -1262,6 +1268,7 @@ class CharacterWidget(QWidget):
         if new_pos.y() + self.height() > screen.height():
             self.falling = False
             new_pos.setY(screen.height() - self.height())
+            self.current_action = "idle"  # 떨어진 후 idle 상태로 변경
             self.start_auto_move()
 
         self.move(new_pos)
