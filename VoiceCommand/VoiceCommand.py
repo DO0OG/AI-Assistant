@@ -947,6 +947,9 @@ class VoiceRecognitionThread(QThread):
                 keyword_index = self.porcupine.process(pcm)
                 if keyword_index >= 0:
                     logging.info("웨이크 워드 '아리야' 감지!")
+                    wake_responses = ["네?", "부르셨나요?"]
+                    response = random.choice(wake_responses)
+                    text_to_speech(response)
                     self.listening_state_changed.emit(True)
                     self.recognize_speech()
                     self.listening_state_changed.emit(False)
@@ -989,7 +992,7 @@ class VoiceRecognitionThread(QThread):
             text = r.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
-            
+
             command_executed = execute_command(text)
             if not command_executed:
                 logging.info("명령어가 없습니다. AI 응답을 생성합니다.")
