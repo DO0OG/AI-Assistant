@@ -24,6 +24,9 @@ import psutil
 import whisper
 import speech_recognition as sr
 import torch
+import pvporcupine
+import pyaudio
+import struct
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -48,8 +51,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QAction, QImage, QCursor
 from PySide6.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, Signal
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QAction, QImage, QPen, QColor
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
@@ -65,6 +68,11 @@ if mecab_path not in os.environ["PATH"]:
 # MeCab 사전 경로 지정
 dicdir = r"C:\Program Files\MeCab\dic\ipadic"
 os.environ["MECAB_DICDIR"] = dicdir
+
+icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+if not os.path.exists(icon_path):
+    print(f"경고: 아이콘 파일을 찾을 수 없습니다: {icon_path}")
+    icon_path = None  # 아이콘 파일이 없을 경우 None으로
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -84,54 +92,64 @@ volume = cast(interface, POINTER(IAudioEndpointVolume))
 
 # 로그 설정
 def setup_logging():
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"ari_log_{current_time}.log")
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
-    )
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        filename='voice_command.log',
+                        filemode='w')
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+    console.setFormatter(formatter)
+    logging.getLogger('').addHandler(console)
 
 
 class ModelLoadingThread(QThread):
     finished = Signal()
+    progress = Signal(str)  # 진행 상황을 알리기 위한 시그널 추가
 
     def run(self):
         global tts_model, speaker_ids, whisper_model
-        logging.info("TTS 및 Whisper 모델 로딩 중...")
-        with torch.no_grad():
-            tts_model = TTS(language="KR", device=device)
-            speaker_ids = tts_model.hps.data.spk2id
+        try:
+            self.progress.emit("TTS 모델 로딩 중...")
+            with torch.no_grad():
+                tts_model = TTS(language="KR", device=device)
+                speaker_ids = tts_model.hps.data.spk2id
+
+            self.progress.emit("Whisper 모델 로딩 중...")
             whisper_model = whisper.load_model("medium", device=device)
-        logging.info("TTS 및 Whisper 모델 로딩 완료. " + device)
-        self.finished.emit()
+
+            logging.info("TTS 및 Whisper 모델 로딩 완료. " + device)
+        except Exception as e:
+            logging.error(f"모델 로딩 중 오류 발생: {str(e)}")
+        finally:
+            self.finished.emit()
 
 
 def text_to_speech(text):
     global tts_model, speaker_ids
-    output_path = os.path.abspath("response.wav")
-    tts_model.tts_to_file(text, speaker_ids["KR"], output_path, speed=1.0)
+    if tts_model is None or speaker_ids is None:
+        logging.error("TTS 모델이 초기화되지 않았습니다.")
+        return
 
-    # TTS 재생 전에 음성 인식을 비활성화
-    app = QApplication.instance()
-    if app and hasattr(app, "voice_thread") and app.voice_thread:
-        app.voice_thread.is_tts_playing = True
+    try:
+        output_path = os.path.abspath("response.wav")
+        tts_model.tts_to_file(text, speaker_ids["KR"], output_path, speed=1.0)
 
-    # pydub를 사용하여 오디오 재생
-    sound = AudioSegment.from_file(output_path)
-    play(sound)
-    os.remove(output_path)  # 오디오 파일 삭제
+        # TTS 재생 전에 음성 인식을 비활성화
+        app = QApplication.instance()
+        if app and hasattr(app, "voice_thread") and app.voice_thread:
+            app.voice_thread.is_tts_playing = True
 
-    # TTS 재생 후에 음성 인식을 다시 활성화
-    if app and hasattr(app, "voice_thread") and app.voice_thread:
-        app.voice_thread.is_tts_playing = False
+        # pydub를 사용하여 오디오 재생
+        sound = AudioSegment.from_file(output_path)
+        play(sound)
+        os.remove(output_path)  # 오디오 파일 삭제
+
+        # TTS 재생 후에 음성 인식을 다시 활성화
+        if app and hasattr(app, "voice_thread") and app.voice_thread:
+            app.voice_thread.is_tts_playing = False
+    except Exception as e:
+        logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
 
 def shutdown_computer():
@@ -354,8 +372,8 @@ class CharacterWidget(QWidget):
         if path not in self.image_cache:
             image = QImage(path)
             scaled_image = image.scaled(
-                image.width() * 0.75,
-                image.height() * 0.75,
+                image.width() * 2,
+                image.height() * 2,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
@@ -472,8 +490,6 @@ class CharacterWidget(QWidget):
 
     def create_context_menu(self):
         self.context_menu = QMenu(self)
-        toggle_action = self.context_menu.addAction("음성 인식 토글")
-        toggle_action.triggered.connect(self.toggle_voice_recognition.emit)
         sit_action = self.context_menu.addAction("앉기")
         sit_action.triggered.connect(self.sit)
         idle_action = self.context_menu.addAction("기본 상태")
@@ -664,190 +680,88 @@ class VoiceCommandThread(QThread):
 
 class SystemTrayIcon(QSystemTrayIcon):
     def __init__(self, icon, parent=None):
-        super().__init__(icon, parent)
-        self.setToolTip("Ari")
-        self.create_menu()
+        super(SystemTrayIcon, self).__init__(icon, parent)
+        self.setToolTip(f"Ari Voice Command")
 
-        self.loading_thread = ModelLoadingThread()
-        self.loading_thread.finished.connect(self.on_model_loaded)
-        self.loading_thread.start()
+        self.menu = QMenu(parent)
+        self.setContextMenu(self.menu)
 
-        self.voice_thread = None
+        self.character_widgets = []
+        self.max_characters = 5
 
-        self.last_toggle_time = 0
-        self.toggle_cooldown = 1  # 1초
+        self.add_character_action = self.menu.addAction("캐릭터 추가")
+        self.add_character_action.triggered.connect(self.add_character)
 
-        # keyboard 라이브러리를 사용한 전역 단축키 설정
-        keyboard.add_hotkey("ctrl+shift+a", self.toggle_voice_recognition_debounced)
+        self.remove_character_action = self.menu.addAction("캐릭터 제거")
+        self.remove_character_action.triggered.connect(self.remove_character)
+        self.remove_character_action.setEnabled(False)
+        
+        self.exit_action = self.menu.addAction("종료")
+        self.exit_action.triggered.connect(self.exit)
 
-        self.character_widgets = []  # CharacterWidget 인스턴스들을 저장할 리스트
-        self.max_characters = 15  # 최대 캐릭터 수
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self.start_random_move)
-        self.voice_thread = VoiceCommandThread()
-        self.voice_thread.command_signal.connect(self.handle_command)
-        self.voice_thread.start_listening_signal.connect(self.start_listening)
-        self.voice_thread.stop_listening_signal.connect(self.stop_listening)
+        self.animation_timer.start(random.randint(3000, 10000))
 
-        self.activated.connect(self.on_tray_icon_activated)
+        self.voice_thread = None  # voice_thread 속성 추가
 
-        self.memory_threshold = 75  # 메모리 사용량 임계값 (%)
-        self.check_interval = 60000  # 기본 체크 간격: 1분
-        self.last_memory_usage = psutil.virtual_memory().percent
+    def set_voice_thread(self, thread):
+        self.voice_thread = thread
 
-        # 메모리 모니터링 타이머 설정
-        self.memory_check_timer = QTimer(self)
-        self.memory_check_timer.timeout.connect(self.check_memory_usage)
-        self.memory_check_timer.start(self.check_interval)
-
-        try:
-            self.ai_assistant = get_ai_assistant()
-            print("AI 어시스턴트 초기화 성공")
-        except Exception as e:
-            print(f"AI 어시스턴트 초기화 실패: {str(e)}")
-            self.ai_assistant = None
-
-    def check_memory_usage(self):
-        current_memory = psutil.virtual_memory().percent
-        memory_increase = current_memory - self.last_memory_usage
-
-        if current_memory > self.memory_threshold or memory_increase > 10:
-            self.run_gc()
-            self.check_interval = min(self.check_interval, 30000)  # 최소 30초 간격
-        else:
-            self.check_interval = min(self.check_interval * 2, 300000)  # 최대 5분 간격
-
-        self.last_memory_usage = current_memory
-        self.memory_check_timer.setInterval(self.check_interval)
-
-    def run_gc(self):
-        before_memory = psutil.virtual_memory().percent
-        gc.collect()
-        after_memory = psutil.virtual_memory().percent
-        logging.info(f"가비지 컬렉션 실행: 메모리 사용량 {before_memory}% -> {after_memory}%")
-
-    def start_listening(self):
+    def exit(self):
+        if self.voice_thread:
+            self.voice_thread.stop()
+            self.voice_thread.wait()
         for character in self.character_widgets:
-            character.set_listening_state(True)
+            character.close()
+        self.character_widgets.clear()
+        QApplication.instance().quit()
 
-    def stop_listening(self):
-        for character in self.character_widgets:
-            character.set_listening_state(False)
+    def on_model_loaded(self):
+        # 이 메서드는 더 이상 필요하지 않지만, 오류를 방지하기 위해 빈 메서드로 유지합니다.
+        pass
 
     def create_menu(self):
         menu = QMenu()
-        self.toggle_action = QAction("음성 인식 토글 (Ctrl+Shift+A)", self)
-        self.toggle_action.setEnabled(False)  # 초기에 비활성화
-        menu.addAction(self.toggle_action)
-
         self.add_character_action = QAction("캐릭터 추가", self)
         self.add_character_action.triggered.connect(self.add_character)
         menu.addAction(self.add_character_action)
 
         self.remove_character_action = QAction("캐릭터 제거", self)
         self.remove_character_action.triggered.connect(self.remove_character)
-        self.remove_character_action.setEnabled(False)  # 초기에 비활성화
+        self.remove_character_action.setEnabled(False)
         menu.addAction(self.remove_character_action)
 
         exit_action = menu.addAction("종료")
-        self.toggle_action.triggered.connect(self.toggle_voice_recognition)
         exit_action.triggered.connect(self.exit_with_farewell)
         self.setContextMenu(menu)
-
-    def toggle_voice_recognition(self):
-        if self.voice_thread:
-            self.voice_thread.toggle_listening()
-            is_listening = self.voice_thread.is_listening
-            for character in self.character_widgets:
-                character.set_listening_state(is_listening)
-            if is_listening:
-                self.animation_timer.stop()
-            else:
-                self.animation_timer.start(random.randint(3000, 10000))
-            self.showMessage(
-                "음성 인식",
-                f'음성 인식이 {"활성화" if is_listening else "비활성화"}되었습니다.',
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
-
-    def toggle_voice_recognition_debounced(self):
-        current_time = time.time()
-        if current_time - self.last_toggle_time > self.toggle_cooldown:
-            self.toggle_voice_recognition()
-            self.last_toggle_time = current_time
-
-    def on_model_loaded(self):
-        self.voice_thread = VoiceCommandThread()
-        self.voice_thread.command_signal.connect(self.handle_command)
-        self.voice_thread.finished.connect(self.exit_with_farewell)
-        self.voice_thread.start()
-        self.toggle_action.setEnabled(True)
-        self.showMessage(
-            "Ari",
-            "TTS 및 음성 인식 준비 완료",
-            QSystemTrayIcon.MessageIcon.Information,
-            2000,
-        )
 
     def handle_command(self, command):
         logging.info(f"받은 명령: {command}")
         if "종료" in command:
             logging.info("프로그램을 종료합니다.")
-            self.toggle_action.setEnabled(False)  # 토글 버튼 비활성화
             self.exit_with_farewell()
-        elif "아리" in command or "아리야" in command or "아리아" in command:
-            # "아리" 이후의 명령만 추출
-            _, *command_parts = command.split(
-                "아리야"
-                if "아리야" in command
-                else "아리아" if "아리아" in command else "아리"
-            )
-            if command_parts:
-                actual_command = command_parts[-1].strip()
-                logging.info(f"실제 실행할 명령: {actual_command}")
-                if any(
-                    keyword in actual_command
-                    for keyword in [
-                        "열어줘",
-                        "볼륨",
-                        "타이머",
-                        "전원 끄기",
-                        "컴퓨터 끄기",
-                        "유튜브"
-                    ]
-                ):
-                    execute_command(actual_command)
-                else:
-                    # AI 모델을 사용하여 응답 생성
-                    if self.ai_assistant is not None:
-                        try:
-                            response = self.ai_assistant.process_query(actual_command)
-                            if response:
-                                logging.info(f"AI 응답: {response}")
-                                # TTS를 사용하여 응답을 음성으로 출력
-                                text_to_speech(response)
-                            else:
-                                logging.error("AI 응답이 비어 있습니다.")
-                                text_to_speech("죄송합니다. 응답을 생성하는 데 문제가 있었습니다.")
-                        except Exception as e:
-                            logging.error(f"AI 응답 처리 중 오류 발생: {str(e)}")
-                            text_to_speech("죄송합니다. 응답을 처리하는 데 문제가 발생했습니다.")
-                    else:
-                        logging.error("AI 어시스턴트가 초기화되지 않았습니다.")
-                        text_to_speech("죄송합니다. AI 어시스턴트를 사용할 수 없습니다.")
-            else:
-                logging.info("추가 명령이 없습니다.")
-                text_to_speech("네, 무엇을 도와드릴까요?")
         else:
-            logging.info("'아리'로 시작하는 명령이 아닙니다.")
-        # 명령어 실행 후
+            if self.ai_assistant is not None:
+                try:
+                    response = self.ai_assistant.process_query(command)
+                    if response:
+                        logging.info(f"AI 응답: {response}")
+                        text_to_speech(response)
+                    else:
+                        logging.error("AI 응답이 비어 있습니다.")
+                        text_to_speech("죄송합니다. 응답을 생성하는 데 문제가 있었습니다.")
+                except Exception as e:
+                    logging.error(f"AI 응답 처리 중 오류 발생: {str(e)}")
+                    text_to_speech("죄송합니다. 응답을 처리하는 데 문제가 발생했습니다.")
+            else:
+                logging.error("AI 어시스턴트가 초기화되지 않았습니다.")
+                text_to_speech("죄송합니다. AI 어시스턴트를 사용할 수 없습니다.")
         for character in self.character_widgets:
             character.set_listening_state(False)
-        self.voice_thread.is_listening = False
         self.animation_timer.start(
             random.randint(3000, 10000)
-        )  # 명령 처리 후 애니메이션 타이머 재시작
+        )
 
     def exit_with_farewell(self):
         farewells = ["안녕히 가세요.", "아리를 종료합니다."]
@@ -857,14 +771,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         for character in self.character_widgets:
             character.close()
         self.character_widgets.clear()
-        QTimer.singleShot(2000, self.exit)  # 2초 후에 exit 메서드 호출
-
-    def exit(self):
-        keyboard.unhook_all()  # 모든 단축키 해제
-        if self.voice_thread:
-            self.voice_thread.stop()
-            self.voice_thread.wait()  # 스레드가 완전히 종료될 때까지 대기
-        QApplication.instance().quit()  # 애플리케이션 종료
+        QTimer.singleShot(2000, self.exit)
 
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
@@ -876,7 +783,7 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def add_character(self):
         if len(self.character_widgets) < self.max_characters:
-            character = CharacterWidget(self.parent())  # parent 설정
+            character = CharacterWidget(self.parent())
             character.show()
             character.exit_signal.connect(lambda: self.remove_specific_character(character))
             self.character_widgets.append(character)
@@ -915,6 +822,127 @@ class SystemTrayIcon(QSystemTrayIcon):
         for character in self.character_widgets:
             character.start_random_move()
 
+
+class VoiceRecognitionThread(QThread):
+    result = Signal(str)
+    listening_state_changed = Signal(bool)
+
+    def __init__(self, selected_microphone=None):
+        super().__init__()
+        self.running = True
+        self.porcupine = None
+        self.pa = None
+        self.audio_stream = None
+        self.selected_microphone = selected_microphone
+        self.microphone_index = None
+        self.access_key = "erEfeU9UFAe9i9gYVMOvnXY4Ryx5Pu+ldZ1dE22USnH4OdEIkeh8Yg=="  # Picovoice 콘솔에서 받은 액세스 키
+        # 현재 스크립트 파일의 디렉토리 경로를 가져옵니다
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # 키워드 파일 경로를 현재 디렉토리 기준으로 설정합니다
+        self.keyword_path = os.path.join(current_dir, "아리야아_ko_windows_v3_0_0.ppn")
+        self.model_path = os.path.join(current_dir, "porcupine_params_ko.pv")
+
+        # 키워드 파일이 존재하는지 확인합니다
+        if not os.path.exists(self.keyword_path):
+            logging.error(f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}")
+            raise FileNotFoundError(
+                f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}"
+            )
+
+    def run(self):
+        try:
+            logging.info("Porcupine 초기화 중...")
+            self.porcupine = pvporcupine.create(
+                access_key=self.access_key,
+                keyword_paths=[self.keyword_path],
+                model_path=self.model_path,
+                sensitivities=[0.5]
+            )
+            logging.info("Porcupine 초기화 완료")
+
+            logging.info("PyAudio 초기화 중...")
+            self.pa = pyaudio.PyAudio()
+            logging.info("PyAudio 초기화 완료")
+
+            # 마이크 초기화
+            self.init_microphone()
+
+            logging.info("오디오 스트림 열기...")
+            self.audio_stream = self.pa.open(
+                rate=self.porcupine.sample_rate,
+                channels=1,
+                format=pyaudio.paInt16,
+                input=True,
+                input_device_index=self.microphone_index,
+                frames_per_buffer=self.porcupine.frame_length,
+            )
+            logging.info("오디오 스트림 열기 완료")
+
+            logging.info("웨이크 워드 감지 시작...")
+            while self.running:
+                pcm = self.audio_stream.read(self.porcupine.frame_length)
+                pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
+
+                keyword_index = self.porcupine.process(pcm)
+                if keyword_index >= 0:
+                    logging.info("웨이크 워드 '아리야' 감지!")
+                    self.listening_state_changed.emit(True)
+                    self.recognize_speech()
+                    self.listening_state_changed.emit(False)
+
+        except Exception as e:
+            logging.error(f"오류 발생: {str(e)}", exc_info=True)
+        finally:
+            logging.info("음성 인식 스레드 종료 중...")
+            if self.audio_stream is not None:
+                self.audio_stream.close()
+            if self.pa is not None:
+                self.pa.terminate()
+            if self.porcupine is not None:
+                self.porcupine.delete()
+            logging.info("음성 인식 스레드 종료 완료")
+
+    def init_microphone(self):
+        if self.selected_microphone:
+            self.microphone_index = self.get_device_index(self.selected_microphone)
+        else:
+            # 기본 마이크 사용
+            self.microphone_index = None
+        logging.info(f"선택된 마이크 인덱스: {self.microphone_index}")
+
+    def get_device_index(self, device_name):
+        for index, name in enumerate(sr.Microphone.list_microphone_names()):
+            if device_name in name:
+                return index
+        logging.warning(f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다.")
+        return None
+
+    def recognize_speech(self):
+        r = sr.Recognizer()
+        try:
+            with sr.Microphone(device_index=self.microphone_index) as source:
+                logging.info("말씀해 주세요...")
+                audio = r.listen(source, timeout=5, phrase_time_limit=5)
+
+            text = r.recognize_google(audio, language="ko-KR")
+            logging.info(f"인식된 텍스트: {text}")
+            self.result.emit(text)
+        except sr.UnknownValueError:
+            logging.warning("음성을 인식할 수 없습니다.")
+        except sr.RequestError as e:
+            logging.error(f"음성 인식 서비스 오류: {e}")
+        except Exception as e:
+            logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
+
+    def stop(self):
+        self.running = False
+
+    def set_microphone(self, microphone_name):
+        self.selected_microphone = microphone_name
+        self.init_microphone()
+
+
 class CharacterWidget(QWidget):
     exit_signal = Signal()
     toggle_voice_recognition = Signal()
@@ -935,8 +963,8 @@ class CharacterWidget(QWidget):
         self.current_frame = 0
         self.last_pos = self.pos()
 
-        self.facing_right = False
-        self.actions = ["idle", "move", "sit"]
+        self.facing_left = False  # 기본적으로 오른쪽을 바라봄
+        self.actions = ["idle", "walk", "sit"]
         self.current_action = "idle"
 
         self.image_cache = {}
@@ -947,11 +975,12 @@ class CharacterWidget(QWidget):
         self.load_images()
         self.start_auto_move()
 
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self.update_animation)
+        self.animation_timer.start(100)  # 100ms마다 애니메이션 업데이트
+
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
-
-        self.frame_timer = QTimer(self)
-        self.frame_timer.timeout.connect(self.next_frame)
 
         self.move_timer = QTimer(self)
         self.move_timer.timeout.connect(self.start_random_move)
@@ -974,8 +1003,6 @@ class CharacterWidget(QWidget):
 
     def create_context_menu(self):
         self.context_menu = QMenu(self)
-        toggle_action = self.context_menu.addAction("음성 인식 토글")
-        toggle_action.triggered.connect(self.toggle_voice_recognition.emit)
         sit_action = self.context_menu.addAction("앉기")
         sit_action.triggered.connect(self.sit)
         idle_action = self.context_menu.addAction("기본 상태")
@@ -987,21 +1014,21 @@ class CharacterWidget(QWidget):
 
     def load_images(self):
         image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-        self.idle_image = self.load_and_cache_image(os.path.join(image_folder, "idle.png"))
-        self.move_images = [self.load_and_cache_image(os.path.join(image_folder, f"move{i}.png")) for i in range(1, 4)]
-        self.drag_images = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 4)]
-        self.listen_image = self.load_and_cache_image(os.path.join(image_folder, "listen.png"))
-        self.sit_image = self.load_and_cache_image(os.path.join(image_folder, "sit.png"))
-        self.fall_images = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 4)]
-        self.current_image = self.idle_image
+        self.idle_images = [self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png")) for i in range(1, 9)]
+        self.walk_images = [self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png")) for i in range(1, 10)]
+        self.drag_images = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)]
+        self.listen_images = [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)]
+        self.sit_images = [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)]
+        self.fall_images = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+        self.current_image = self.idle_images[0]
         self.resize(QPixmap.fromImage(self.current_image).size())
 
     def load_and_cache_image(self, path):
         if path not in self.image_cache:
             image = QImage(path)
             scaled_image = image.scaled(
-                image.width() * 0.75,
-                image.height() * 0.75,
+                image.width() * 1.5,
+                image.height() * 1.5,
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation,
             )
@@ -1017,7 +1044,6 @@ class CharacterWidget(QWidget):
         if self.animation:
             self.animation.stop()
         self.is_moving = False
-        self.frame_timer.stop()
 
     def start_random_move(self):
         if not self.is_dragging:
@@ -1039,30 +1065,38 @@ class CharacterWidget(QWidget):
             self.animation.setEasingCurve(QEasingCurve.InOutQuad)
             self.animation.finished.connect(self.animationFinished)
             self.animation.start()
-            self.current_action = "move"
+            self.current_action = "walk"
             self.is_moving = True
-            self.frame_timer.start(100)
-            self.facing_right = new_x > start_pos.x()
+            self.facing_left = new_x < start_pos.x()
 
     def animationFinished(self):
         self.is_moving = False
-        self.current_image = self.idle_image
-        self.frame_timer.stop()
+        self.current_action = "idle"
         self.update()
 
-    def next_frame(self):
-        if self.is_moving:
-            self.current_frame = (self.current_frame + 1) % len(self.move_images)
-            self.current_image = self.move_images[self.current_frame]
-            self.update()
+    def update_animation(self):
+        if self.falling:
+            self.current_frame = (self.current_frame + 1) % len(self.fall_images)
+            self.current_image = self.fall_images[self.current_frame]
+        elif self.is_dragging:
+            self.current_frame = (self.current_frame + 1) % len(self.drag_images)
+            self.current_image = self.drag_images[self.current_frame]
+        elif self.is_moving:
+            self.current_frame = (self.current_frame + 1) % len(self.walk_images)
+            self.current_image = self.walk_images[self.current_frame]
+        elif self.current_action == "sit" or self.is_listening:
+            self.current_frame = (self.current_frame + 1) % len(self.sit_images)
+            self.current_image = self.sit_images[self.current_frame]
+        else:  # idle
+            self.current_frame = (self.current_frame + 1) % len(self.idle_images)
+            self.current_image = self.idle_images[self.current_frame]
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        if self.falling:
-            painter.drawPixmap(self.rect(), QPixmap.fromImage(self.current_image))
-        elif self.facing_right and not self.is_dragging:
+        if self.facing_left:
             flipped_image = self.current_image.mirrored(True, False)
             painter.drawPixmap(self.rect(), QPixmap.fromImage(flipped_image))
         else:
@@ -1087,7 +1121,7 @@ class CharacterWidget(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.is_dragging = False
-            self.current_image = self.idle_image
+            self.current_image = self.idle_images[0]
             self.update()
             self.start_auto_move()
 
@@ -1097,15 +1131,10 @@ class CharacterWidget(QWidget):
 
     def update_drag_image(self, new_pos):
         if new_pos.x() < self.last_pos.x():
-            self.current_image = self.drag_images[2]
-            self.facing_right = False
+            self.facing_left = True
         elif new_pos.x() > self.last_pos.x():
-            self.current_image = self.drag_images[1]
-            self.facing_right = True
-        else:
-            self.current_image = self.drag_images[0]
+            self.facing_left = False
         self.last_pos = new_pos
-        self.update()
 
     def show_context_menu(self, pos):
         self.context_menu.exec_(self.mapToGlobal(pos))
@@ -1117,24 +1146,24 @@ class CharacterWidget(QWidget):
     def sit(self):
         self.stop_auto_move()
         self.current_action = "sit"
-        self.current_image = self.sit_image
+        self.current_image = self.sit_images[0]
         self.update()
 
     def idle(self):
         self.current_action = "idle"
-        self.current_image = self.idle_image
+        self.current_image = self.idle_images[0]
         self.update()
         self.start_auto_move()
 
     def _set_listening_state(self, is_listening):
         self.is_listening = is_listening
         if is_listening:
-            self.current_image = self.listen_image
+            self.current_image = self.listen_images[0]
             self.stop_auto_move()
             self.action_timer.stop()
             self.action_duration_timer.stop()
         else:
-            self.current_image = self.idle_image
+            self.current_image = self.idle_images[0]
             self.start_auto_move()
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
@@ -1144,8 +1173,8 @@ class CharacterWidget(QWidget):
 
     def perform_random_action(self):
         if not self.is_listening and not self.is_dragging:
-            action = random.choice(["idle", "move", "sit"])
-            if action == "move":
+            action = random.choice(["idle", "walk", "sit"])
+            if action == "walk":
                 self.start_random_move()
             elif action == "sit":
                 self.sit()
@@ -1177,16 +1206,10 @@ class CharacterWidget(QWidget):
 
         if new_pos.y() + self.height() > screen.height():
             self.falling = False
-            self.fall_timer.stop()
             new_pos.setY(screen.height() - self.height())
-            self.current_image = self.idle_image
             self.start_auto_move()
-        else:
-            self.fall_frame = (self.fall_frame + 1) % len(self.fall_images)
-            self.current_image = self.fall_images[self.fall_frame]
-
+        
         self.move(new_pos)
-        self.update()
 
     def interact_with_others(self):
         if self.parent() and hasattr(self.parent(), 'character_widgets'):
@@ -1210,8 +1233,9 @@ class CharacterWidget(QWidget):
             new_x = current_pos.x() + dx * ratio
             new_y = current_pos.y() + dy * ratio
             self.move(QPoint(int(new_x), int(new_y)))
-            self.current_image = self.move_images[self.current_frame]
-            self.current_frame = (self.current_frame + 1) % len(self.move_images)
+            self.current_frame = (self.current_frame + 1) % len(self.walk_images)
+            self.current_image = self.walk_images[self.current_frame]
+            self.facing_left = dx < 0
             self.update()
 
 
@@ -1219,18 +1243,25 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ari Voice Command - 마이크 설정")
-        self.setGeometry(100, 100, 300, 250)  # 윈도우 크기 조정
-        self.setFixedSize(300, 200)  # 윈도우 크기를 고정
+        self.setGeometry(100, 100, 300, 250)
+        self.setFixedSize(300, 200)
 
-        self.tray_icon = SystemTrayIcon(QIcon(icon_path), self)
+        if icon_path:
+            self.tray_icon = SystemTrayIcon(QIcon(icon_path), self)
+        else:
+            self.tray_icon = SystemTrayIcon(QIcon(), self)  # 빈 아이콘으로 생성
         self.tray_icon.show()
 
         self.tray_icon.add_character()
 
         self.initUI()
 
+        self.model_loading_thread = ModelLoadingThread()
+        self.model_loading_thread.finished.connect(self.on_model_loaded)
+        self.model_loading_thread.start()
+        self.tray_icon.showMessage("Ari", "TTS 및 Whisper 모델 로딩 중...", QSystemTrayIcon.Information, 3000)
+
     def initUI(self):
-        # 마이크 설정 UI 추가
         self.microphone_label = QLabel("마이크 선택:", self)
         self.microphone_label.setGeometry(20, 50, 80, 30)
 
@@ -1245,8 +1276,10 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         selected_microphone = self.microphone_combo.currentText()
         logging.info(f"선택된 마이크: {selected_microphone}")
-        # 마이크 설정 저장 로직 추가
-        self.hide()  # 설정을 저장한 후 창을 닫음
+        if hasattr(self, 'voice_thread') and self.voice_thread:
+            self.voice_thread.selected_microphone = selected_microphone
+            self.voice_thread.init_microphone()
+        self.hide()
         self.tray_icon.showMessage(
             "Ari",
             "마이크 설정이 저장되었습니다.",
@@ -1257,6 +1290,17 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         event.ignore()
         self.hide()
+
+    def on_model_loaded(self):
+        logging.info("모델 로딩이 완료되었습니다.")
+        # 로딩 완료 알림
+        self.tray_icon.showMessage(
+            "Ari", "TTS 및 Whisper 모델 로딩 완료!", QSystemTrayIcon.Information, 3000
+        )
+        # 여기에 모델 로딩 완료 후 수행할 추가 작업을 넣을 수 있습니다.
+
+    def show_loading_progress(self, message):
+        self.tray_icon.showMessage("Ari", message, QSystemTrayIcon.Information, 2000)
 
 
 def main():
@@ -1291,10 +1335,52 @@ def main():
         logging.error(f"예외 발생: {str(e)}")
         sys.exit(1)
 
-
 if __name__ == "__main__":
+    setup_logging()
+    logging.info("프로그램 시작")
+    app = QApplication(sys.argv)
+
+    main_window = MainWindow()
+    main_window.show()
+    
+    main_window.model_loading_thread.progress.connect(main_window.show_loading_progress)
+
+    # 음성 인식 스레드 생성 및 시작
     try:
-        main()
+        voice_thread = VoiceRecognitionThread()
+        voice_thread.start()
+        print("음성 인식 스레드 시작됨")
     except Exception as e:
-        logging.error(f"예외 발생: {str(e)}")
+        print(f"음성 인식 스레드 시작 실패: {str(e)}")
         sys.exit(1)
+
+    # AI 어시스턴트 초기화
+    try:
+        ai_assistant = get_ai_assistant()
+    except Exception as e:
+        logging.error(f"AI 어시스턴트 초기화 실패: {str(e)}")
+        sys.exit(1)
+
+    # 음성 인식 결과 처리
+    def handle_voice_result(text):
+        logging.info(f"인식된 명령: {text}")
+        response = ai_assistant.process_query(text)
+        text_to_speech(response)
+
+    voice_thread.result.connect(handle_voice_result)
+    voice_thread.listening_state_changed.connect(
+        main_window.tray_icon.character_widgets[0].set_listening_state
+    )
+
+    # 마이크 설정 변경 시 음성 인식 스레드에 알림
+    def update_microphone():
+        selected_microphone = main_window.microphone_combo.currentText()
+        voice_thread.set_microphone(selected_microphone)
+
+    main_window.save_button.clicked.connect(update_microphone)
+
+    # 종료 시 정리
+    app.aboutToQuit.connect(voice_thread.stop)
+    app.aboutToQuit.connect(voice_thread.wait)
+
+    sys.exit(app.exec())
