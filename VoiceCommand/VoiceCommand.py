@@ -1,5 +1,6 @@
 import sys
 import os
+import setproctitle
 import random
 import webbrowser
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -1373,6 +1374,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    setproctitle.setproctitle("Ari Voice Command")
     try:
         setup_logging()
         logging.info("프로그램 시작")
@@ -1406,6 +1408,7 @@ def main():
 
 
 if __name__ == "__main__":
+    setproctitle.setproctitle("Ari Voice Command")
     setup_logging()
     logging.info("프로그램 시작")
     app = QApplication(sys.argv)
