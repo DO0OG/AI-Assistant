@@ -262,9 +262,9 @@ def execute_command(command):
         return True
     elif "분 뒤에 전원 꺼줘" in command or "분 후에 전원 꺼줘" in command:
         set_shutdown_timer_from_command(command)
-        return True
-    
-    return False  # 명령어가 없는 경우 False 반환
+    else:
+        response = ai_assistant.process_query(command)
+        text_to_speech(response)
 
 
 def adjust_volume(change):
@@ -692,6 +692,8 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.character_widgets = []
         self.max_characters = 5
 
+        self.activated.connect(self.on_tray_icon_activated)
+
         self.add_character_action = self.menu.addAction("캐릭터 추가")
         self.add_character_action.triggered.connect(self.add_character)
 
@@ -793,11 +795,8 @@ class SystemTrayIcon(QSystemTrayIcon):
 
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
-            parent = self.parent()
-            if isinstance(parent, QMainWindow):
-                parent.show()
-                parent.raise_()
-                parent.activateWindow()
+            self.parent().show()
+            self.parent().activateWindow()
 
     def add_character(self):
         if len(self.character_widgets) < self.max_characters:
@@ -1375,6 +1374,11 @@ class MainWindow(QMainWindow):
     def show_loading_progress(self, message):
         self.tray_icon.showMessage("Ari", message, QSystemTrayIcon.Information, 2000)
 
+    # 윈도우를 보여주는 메서드 추가
+    def show_window(self):
+        self.show()
+        self.activateWindow()
+
 
 def main():
     try:
@@ -1415,7 +1419,7 @@ if __name__ == "__main__":
 
     main_window = MainWindow()
     main_window.show()
-    
+
     main_window.model_loading_thread.progress.connect(main_window.show_loading_progress)
 
     # 음성 인식 스레드 생성 및 시작
@@ -1437,6 +1441,7 @@ if __name__ == "__main__":
     # 음성 인식 결과 처리
     def handle_voice_result(text):
         logging.info(f"인식된 명령: {text}")
+        response = execute_command(text)
 
     voice_thread.result.connect(handle_voice_result)
     voice_thread.listening_state_changed.connect(
