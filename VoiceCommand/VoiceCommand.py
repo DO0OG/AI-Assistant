@@ -283,7 +283,7 @@ def execute_command(command):
         response = f"현재 시간은 {current_time}입니다."
         text_to_speech(response)
         logging.info(f"현재 시간 안내: {response}")
-    elif "전원 꺼 줘" in command or "컴퓨터 꺼줘" in command:
+    elif "전원 꺼 줘" in command or "컴퓨터 꺼 줘" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
     elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
