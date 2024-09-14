@@ -32,4 +32,4 @@
 ::
 ::978f952a14a936cc963da21a135fa983
 @echo off
-start python "%~dp0VoiceCommand.py"
+start pythonw "%~dp0VoiceCommand.py"
