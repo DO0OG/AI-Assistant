@@ -18,7 +18,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import time
 import warnings
 import gc
 import psutil
@@ -33,31 +32,34 @@ from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
     QMenu,
-)
-from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import (
-    QThread,
-    Signal,
-    QTimer,
-    Qt,
-)
-import warnings
-from melo.api import TTS
-from PySide6.QtWidgets import (
-    QApplication,
-    QSystemTrayIcon,
-    QMenu,
     QMainWindow,
     QLabel,
     QWidget,
     QPushButton,
     QComboBox,
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, Signal
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QAction, QImage, QPen, QColor
+from PySide6.QtGui import QIcon, QAction, QPainter, QPixmap, QImage
+from PySide6.QtCore import (
+    QThread,
+    Signal,
+    QTimer,
+    Qt,
+    QPoint,
+    QPropertyAnimation,
+    QEasingCurve,
+)
+from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
+
+# 전역 변수 선언
+tts_model = None
+speaker_ids = None
+whisper_model = None
+ai_assistant = None
+icon_path = None
+volume = None
 
 try:
     ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
@@ -111,14 +113,14 @@ def setup_logging():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
+            logging.StreamHandler(sys.stdout),  # stdout으로 변경
         ],
     )
 
 
 class ModelLoadingThread(QThread):
     finished = Signal()
-    progress = Signal(str)  # 진행 상황을 알리기 위한 시그널 추가
+    progress = Signal(str)
 
     def run(self):
         global tts_model, speaker_ids, whisper_model
@@ -556,9 +558,6 @@ class CharacterWidget(QWidget):
             self.start_auto_move()
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
-
-    def set_listening_state(self, is_listening):
-        self.set_listening_state_signal.emit(is_listening)
 
     def perform_random_action(self):
         if not self.is_listening and not self.is_dragging:
@@ -1318,6 +1317,7 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 300, 250)
         self.setFixedSize(300, 200)
 
+        global icon_path
         if icon_path:
             self.tray_icon = SystemTrayIcon(QIcon(icon_path), self)
         else:
@@ -1350,16 +1350,25 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         selected_microphone = self.microphone_combo.currentText()
         logging.info(f"선택된 마이크: {selected_microphone}")
-        if hasattr(self, "voice_thread") and self.voice_thread:
-            self.voice_thread.selected_microphone = selected_microphone
-            self.voice_thread.init_microphone()
-        self.hide()
-        self.tray_icon.showMessage(
-            "Ari",
-            "마이크 설정이 저장되었습니다.",
-            QSystemTrayIcon.Information,
-            2000,
-        )
+        try:
+            if hasattr(self, "voice_thread") and self.voice_thread:
+                self.voice_thread.selected_microphone = selected_microphone
+                self.voice_thread.init_microphone()
+            self.hide()
+            self.tray_icon.showMessage(
+                "Ari",
+                "마이크 설정이 저장되었습니다.",
+                QSystemTrayIcon.Information,
+                2000,
+            )
+        except Exception as e:
+            logging.error(f"마이크 설정 저장 중 오류 발생: {str(e)}")
+            self.tray_icon.showMessage(
+                "Ari",
+                "마이크 설정 저장 중 오류가 발생했습니다.",
+                QSystemTrayIcon.Warning,
+                2000,
+            )
 
     def closeEvent(self, event):
         event.ignore()
@@ -1383,6 +1392,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    global ai_assistant, icon_path
     setproctitle.setproctitle("Ari Voice Command")
     try:
         setup_logging()
@@ -1395,73 +1405,59 @@ def main():
 
         app.setQuitOnLastWindowClosed(False)
 
-        global icon_path
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
         if not os.path.exists(icon_path):
             logging.warning("아이콘 파일이 없습니다. 기본 아이콘을 사용합니다.")
             icon_path = None
 
         main_window = MainWindow()
-        main_window.show()  # 메인 윈도우를 표시합니다.
+        main_window.show()
 
         tray_icon = main_window.tray_icon
 
-        app.voice_thread = tray_icon.voice_thread
+        # AI 어시스턴트 초기화
+        try:
+            ai_assistant = get_ai_assistant()
+        except Exception as e:
+            logging.error(f"AI 어시스턴트 초기화 실패: {str(e)}")
+            sys.exit(1)
 
+        # 음성 인식 스레드 생성 및 시작
+        try:
+            voice_thread = VoiceRecognitionThread()
+            voice_thread.start()
+            logging.info("음성 인식 스레드 시작됨")
+        except Exception as e:
+            logging.error(f"음성 인식 스레드 시작 실패: {str(e)}")
+            sys.exit(1)
+
+        # 음성 인식 결과 처리
+        def handle_voice_result(text):
+            logging.info(f"인식된 명령: {text}")
+            execute_command(text)
+
+        voice_thread.result.connect(handle_voice_result)
+        voice_thread.listening_state_changed.connect(
+            main_window.tray_icon.character_widgets[0].set_listening_state
+        )
+
+        # 마이크 설정 변경 시 음성 인식 스레드에 알림
+        def update_microphone():
+            selected_microphone = main_window.microphone_combo.currentText()
+            voice_thread.set_microphone(selected_microphone)
+
+        main_window.save_button.clicked.connect(update_microphone)
+
+        # 종료 시 정리
+        app.aboutToQuit.connect(voice_thread.stop)
+        app.aboutToQuit.connect(voice_thread.wait)
         app.aboutToQuit.connect(tray_icon.exit)
 
         sys.exit(app.exec())
     except Exception as e:
-        logging.error(f"예외 발생: {str(e)}")
+        logging.error(f"예외 발생: {str(e)}", exc_info=True)
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    setproctitle.setproctitle("Ari Voice Command")
-    setup_logging()
-    logging.info("프로그램 시작")
-    app = QApplication(sys.argv)
-
-    main_window = MainWindow()
-    main_window.show()
-
-    main_window.model_loading_thread.progress.connect(main_window.show_loading_progress)
-
-    # 음성 인식 스레드 생성 및 시작
-    try:
-        voice_thread = VoiceRecognitionThread()
-        voice_thread.start()
-        print("음성 인식 스레드 시작됨")
-    except Exception as e:
-        print(f"음성 인식 스레드 시작 실패: {str(e)}")
-        sys.exit(1)
-
-    # AI 어시스턴트 초기화
-    try:
-        ai_assistant = get_ai_assistant()
-    except Exception as e:
-        logging.error(f"AI 어시스턴트 초기화 실패: {str(e)}")
-        sys.exit(1)
-
-    # 음성 인식 결과 처리
-    def handle_voice_result(text):
-        logging.info(f"인식된 명령: {text}")
-        response = execute_command(text)
-
-    voice_thread.result.connect(handle_voice_result)
-    voice_thread.listening_state_changed.connect(
-        main_window.tray_icon.character_widgets[0].set_listening_state
-    )
-
-    # 마이크 설정 변경 시 음성 인식 스레드에 알림
-    def update_microphone():
-        selected_microphone = main_window.microphone_combo.currentText()
-        voice_thread.set_microphone(selected_microphone)
-
-    main_window.save_button.clicked.connect(update_microphone)
-
-    # 종료 시 정리
-    app.aboutToQuit.connect(voice_thread.stop)
-    app.aboutToQuit.connect(voice_thread.wait)
-
-    sys.exit(app.exec())
+    main()
