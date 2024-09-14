@@ -193,7 +193,6 @@ def set_shutdown_timer(minutes):
 
 def open_website(url):
     webbrowser.open(url)
-    text_to_speech(f"{url}을(를) 열었습니다.")
     logging.info(f"웹사이트 열기: {url}")
 
 
@@ -237,8 +236,8 @@ def execute_command(command):
     # 사이트 이름을 매핑하는 사전
     site_mapping = {"네이버": "naver", "유튜브": "youtube"}
 
-    if "열어줘" in command:
-        site = command.split("열어줘")[0].strip()
+    if "열어 줘" in command:
+        site = command.split("열어 줘")[0].strip()
 
         # 사이트 이름을 매핑된 값으로 변환
         site_key = site_mapping.get(site, site)
@@ -247,6 +246,10 @@ def execute_command(command):
             f"https://www.{site_key}.com" if site_key else "https://www.google.com"
         )
         text_to_speech("브라우저를 열었습니다.")
+    elif "검색해 줘" in command:
+        site = command.split("검색해 줘")[0].strip()
+        open_website(f"https://www.google.com/search?q={site}")
+        text_to_speech(f"{site}에 대한 검색 결과입니다.")
     elif "유튜브" in command and ("재생" in command or "검색" in command):
         query = (
             command.split("유튜브")[1]
