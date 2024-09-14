@@ -232,6 +232,11 @@ def search_and_play_youtube(query, play=True):
         webbrowser.open(search_url)
 
 
+def get_current_time():
+    now = datetime.now()
+    return now.strftime("%H시 %M분")
+
+
 def execute_command(command):
     logging.info(f"실행할 명령: {command}")
 
@@ -273,6 +278,11 @@ def execute_command(command):
         text_to_speech("음소거가 해제되었습니다.")
     elif "타이머" in command:
         set_timer_from_command(command)
+    elif "몇 시야" in command:
+        current_time = get_current_time()
+        response = f"현재 시간은 {current_time}입니다."
+        text_to_speech(response)
+        logging.info(f"현재 시간 안내: {response}")
     elif "전원 끄기" in command or "컴퓨터 끄기" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
