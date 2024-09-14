@@ -28,8 +28,6 @@ import pvporcupine
 import pyaudio
 import struct
 import ctypes
-import win32gui
-import win32con
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -1392,15 +1390,11 @@ class MainWindow(QMainWindow):
         self.show()
         self.activateWindow()
 
-def hide_console():
-    console_window = win32gui.GetForegroundWindow()
-    win32gui.ShowWindow(console_window, win32con.SW_HIDE)
 
 def main():
     global ai_assistant, icon_path
     setproctitle.setproctitle("Ari Voice Command")
     try:
-        hide_console()  # 콘솔 창 숨기기
         setup_logging()
         logging.info("프로그램 시작")
         app = QApplication(sys.argv)
