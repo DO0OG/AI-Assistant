@@ -52,6 +52,11 @@ from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
+import cProfile
+import pstats
+import io
+import inspect
+from functools import lru_cache
 
 # 전역 변수 선언
 tts_model = None
@@ -61,6 +66,23 @@ ai_assistant = None
 icon_path = None
 volume = None
 active_timer = None
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+@lru_cache(maxsize=None)
+def load_and_cache_image(path):
+    image = QImage(path)
+    if image.isNull():
+        logging.error(f"이미지를 로드할 수 없습니다: {path}")
+        return QImage()
+    return image.scaled(
+        image.width() * 1.5,
+        image.height() * 1.5,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+
 
 try:
     ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
@@ -369,7 +391,6 @@ class CharacterWidget(QWidget):
         self.action_duration_timer = QTimer(self)
         self.action_duration_timer.timeout.connect(self.end_current_action)
 
-        self.image_cache = {}
         self.load_images()
         self.start_auto_move()
 
@@ -386,45 +407,51 @@ class CharacterWidget(QWidget):
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
 
-    def load_images(self):
-        image_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "images"
-        )
-        self.idle_image = self.load_and_cache_image(
-            os.path.join(image_folder, "idle.png")
-        )
-        self.move_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"move{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.drag_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.listen_image = self.load_and_cache_image(
-            os.path.join(image_folder, "listen.png")
-        )
-        self.sit_image = self.load_and_cache_image(
-            os.path.join(image_folder, "sit.png")
-        )
-        self.fall_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.current_image = self.idle_image
-        self.resize(QPixmap.fromImage(self.current_image).size())
 
-    def load_and_cache_image(self, path):
-        if path not in self.image_cache:
-            image = QImage(path)
-            scaled_image = image.scaled(
-                image.width() * 2,
-                image.height() * 2,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.image_cache[path] = scaled_image
-        return self.image_cache[path]
+    def load_images(self):
+        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+
+        def load_image_set(base_name, count):
+            return [
+                load_and_cache_image(os.path.join(image_folder, f"{base_name}{i}.png"))
+                for i in range(1, count + 1)
+            ]
+
+        try:
+            self.idle_image = load_and_cache_image(os.path.join(image_folder, "idle.png"))
+            self.move_images = load_image_set("move", 3)
+            self.drag_images = load_image_set("drag", 3)
+            self.sit_image = load_and_cache_image(os.path.join(image_folder, "sit.png"))
+            self.fall_images = load_image_set("fall", 3)
+
+            # 'listen' 이미지를 'sit' 이미지로 대체
+            self.listen_image = self.sit_image
+
+            self.current_image = self.idle_image
+            self.resize(self.current_image.size())
+
+            logging.info("모든 이미지를 성공적으로 로드했습니다.")
+        except Exception as e:
+            logging.error(f"이미지 로딩 중 오류 발생: {str(e)}")
+            # 기본 이미지 설정 (예: 빈 이미지)
+            self.current_image = QImage(100, 100, QImage.Format_ARGB32)
+            self.current_image.fill(Qt.transparent)
+            self.resize(100, 100)
+
+        # 이미지 로딩 확인
+        for attr in [
+            "idle_image",
+            "move_images",
+            "drag_images",
+            "sit_image",
+            "fall_images",
+        ]:
+            if (
+                not hasattr(self, attr)
+                or getattr(self, attr) is None
+                or (isinstance(getattr(self, attr), list) and not getattr(self, attr))
+            ):
+                logging.warning(f"{attr} 이미지를 로드하지 못했습니다.")
 
     def start_auto_move(self):
         if not self.is_listening:
@@ -1069,47 +1096,33 @@ class CharacterWidget(QWidget):
         exit_action.triggered.connect(self.close)
 
     def load_images(self):
-        image_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "images"
-        )
-        self.idle_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png"))
-            for i in range(1, 9)
-        ]
-        self.walk_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png"))
-            for i in range(1, 10)
-        ]
-        self.drag_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
-            for i in range(1, 9)
-        ]
-        self.listen_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
-            for i in range(1, 10)
-        ]
-        self.sit_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
-            for i in range(1, 10)
-        ]
-        self.fall_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
-            for i in range(1, 9)
-        ]
-        self.current_image = self.idle_images[0]
-        self.resize(QPixmap.fromImage(self.current_image).size())
+        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+        image_types = ['idle', 'walk', 'drag', 'sit', 'fall']
+        image_counts = [8, 9, 8, 9, 8]
 
-    def load_and_cache_image(self, path):
-        if path not in self.image_cache:
-            image = QImage(path)
-            scaled_image = image.scaled(
-                image.width() * 1.5,
-                image.height() * 1.5,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.image_cache[path] = scaled_image
-        return self.image_cache[path]
+        for img_type, count in zip(image_types, image_counts):
+            images = []
+            for i in range(1, count + 1):
+                image_path = os.path.join(image_folder, f"{img_type}{i}.png")
+                if os.path.exists(image_path):
+                    image = load_and_cache_image(image_path)
+                    if not image.isNull():
+                        images.append(image)
+                    else:
+                        logging.error(f"이미지를 로드할 수 없습니다: {image_path}")
+                else:
+                    logging.error(f"이미지 파일이 존재하지 않습니다: {image_path}")
+            
+            setattr(self, f"{img_type}_images", images)
+
+        # listen 이미지를 sit 이미지로 설정
+        self.listen_images = self.sit_images
+
+        if self.idle_images:
+            self.current_image = self.idle_images[0]
+            self.resize(self.current_image.size())
+        else:
+            logging.error("idle 이미지를 로드할 수 없습니다.")
 
     def start_auto_move(self):
         if not self.is_listening:
@@ -1163,21 +1176,27 @@ class CharacterWidget(QWidget):
         self.update()
 
     def update_animation(self):
-        if self.falling:
-            self.current_frame = (self.current_frame + 1) % len(self.fall_images)
-            self.current_image = self.fall_images[self.current_frame]
-        elif self.is_dragging:
-            self.current_frame = (self.current_frame + 1) % len(self.drag_images)
-            self.current_image = self.drag_images[self.current_frame]
-        elif self.is_moving and not self.is_listening:
-            self.current_frame = (self.current_frame + 1) % len(self.walk_images)
-            self.current_image = self.walk_images[self.current_frame]
-        elif self.current_action == "sit" or self.is_listening:
-            self.current_frame = (self.current_frame + 1) % len(self.sit_images)
-            self.current_image = self.sit_images[self.current_frame]
-        else:  # idle
-            self.current_frame = (self.current_frame + 1) % len(self.idle_images)
-            self.current_image = self.idle_images[self.current_frame]
+        action_map = {
+            'falling': self.fall_images,
+            'dragging': self.drag_images,
+            'moving': self.walk_images,
+            'sitting': self.sit_images,
+            'listening': self.sit_images,
+            'idle': self.idle_images
+        }
+
+        current_action = next((action for action, condition in [
+            ('falling', self.falling),
+            ('dragging', self.is_dragging),
+            ('moving', self.is_moving and not self.is_listening),
+            ('sitting', self.current_action == "sit"),
+            ('listening', self.is_listening),
+            ('idle', True)
+        ] if condition), 'idle')
+
+        images = action_map[current_action]
+        self.current_frame = (self.current_frame + 1) % len(images)
+        self.current_image = images[self.current_frame]
         self.update()
 
     def paintEvent(self, event):
@@ -1418,9 +1437,55 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
 
+def auto_optimize(func):
+    def wrapper(*args, **kwargs):
+        pr = cProfile.Profile()
+        pr.enable()
+        result = func(*args, **kwargs)
+        pr.disable()
+        s = io.StringIO()
+        ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
+        ps.print_stats()
+
+        # 프로파일링 결과 분석
+        lines = s.getvalue().split("\n")
+        for line in lines[5:]:  # 상위 5개 결과를 무시
+            if line.strip() and not line.startswith("   ncalls"):
+                parts = line.split()
+                if len(parts) >= 6:
+                    func_name = parts[5]
+                    if "/" in func_name:
+                        func_name = func_name.split("/")[-1]
+                    if ":" in func_name:
+                        func_name = func_name.split(":")[0]
+
+                    # 가장 시간이 많이 소요되는 함수에 대해 최적화 시도
+                    if hasattr(globals()[func_name], "__code__"):
+                        optimize_function(globals()[func_name])
+                    break
+
+        return result
+
+    return wrapper
+
+
+def optimize_function(func):
+    # 간단한 최적화: lru_cache 적용
+    if not hasattr(func, "cache_info"):
+        optimized_func = lru_cache(maxsize=None)(func)
+        globals()[func.__name__] = optimized_func
+        print(f"함수 '{func.__name__}'에 lru_cache를 적용했습니다.")
+
+
+@auto_optimize
 def main():
     global ai_assistant, icon_path
     setproctitle.setproctitle("Ari Voice Command")
+
+    # 프로파일링 시작
+    pr = cProfile.Profile()
+    pr.enable()
+
     try:
         setup_logging()
         logging.info("프로그램 시작")
