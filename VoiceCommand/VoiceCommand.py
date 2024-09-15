@@ -253,16 +253,17 @@ def execute_command(command):
             f"https://www.{site_key}.com" if site_key else "https://www.google.com"
         )
         text_to_speech("브라우저를 열었습니다.")
-    elif "검색해 줘" in command:
-        site = command.split("검색해 줘")[0].strip()
-        open_website(f"https://www.google.com/search?q={site}")
-        text_to_speech(f"{site}에 대한 검색 결과입니다.")
     elif "유튜브" in command and ("재생" in command or "검색" in command):
         query = (
             command.split("유튜브")[1]
             .split("재생" if "재생" in command else "검색")[0]
             .strip()
         )
+        search_and_play_youtube(query, play="재생" in command)
+    elif "검색해 줘" in command:
+        site = command.split("검색해 줘")[0].strip()
+        open_website(f"https://www.google.com/search?q={site}")
+        text_to_speech(f"{site}에 대한 검색 결과입니다.")
         search_and_play_youtube(query, play="재생" in command)
     elif "볼륨 키우기" in command or "볼륨 올려" in command:
         adjust_volume(0.1)
