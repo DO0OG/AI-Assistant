@@ -52,11 +52,6 @@ from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
-import cProfile
-import pstats
-import io
-import inspect
-from functools import lru_cache
 
 # 전역 변수 선언
 tts_model = None
@@ -66,23 +61,6 @@ ai_assistant = None
 icon_path = None
 volume = None
 active_timer = None
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-@lru_cache(maxsize=None)
-def load_and_cache_image(path):
-    image = QImage(path)
-    if image.isNull():
-        logging.error(f"이미지를 로드할 수 없습니다: {path}")
-        return QImage()
-    return image.scaled(
-        image.width() * 1.5,
-        image.height() * 1.5,
-        Qt.KeepAspectRatio,
-        Qt.SmoothTransformation,
-    )
-
 
 try:
     ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
@@ -133,6 +111,47 @@ def setup_logging():
             logging.StreamHandler(sys.stdout),  # stdout으로 변경
         ],
     )
+
+
+# 자원 모니터링 스레드
+class ResourceMonitor(QThread):
+    gc_needed = Signal()
+
+    def __init__(self, memory_threshold=80, cpu_threshold=70, check_interval=5):
+        super().__init__()
+        self.memory_threshold = memory_threshold
+        self.cpu_threshold = cpu_threshold
+        self.check_interval = check_interval
+        self.running = True
+
+    def run(self):
+        while self.running:
+            memory_percent = psutil.virtual_memory().percent
+            cpu_percent = psutil.cpu_percent(interval=1)
+
+            if (
+                memory_percent > self.memory_threshold
+                or cpu_percent > self.cpu_threshold
+            ):
+                self.gc_needed.emit()
+
+            time.sleep(self.check_interval)
+
+    def stop(self):
+        self.running = False
+
+
+# 가비지 컬렉션 실행
+def perform_gc():
+    logging.info("가비지 컬렉션 실행 중...")
+    gc.collect()
+    logging.info("가비지 컬렉션 완료")
+
+
+def perform_gc():
+    logging.info("가비지 컬렉션 실행 중...")
+    gc.collect()
+    logging.info("가비지 컬렉션 완료")
 
 
 class ModelLoadingThread(QThread):
@@ -391,6 +410,7 @@ class CharacterWidget(QWidget):
         self.action_duration_timer = QTimer(self)
         self.action_duration_timer.timeout.connect(self.end_current_action)
 
+        self.image_cache = {}
         self.load_images()
         self.start_auto_move()
 
@@ -407,51 +427,45 @@ class CharacterWidget(QWidget):
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
 
-
     def load_images(self):
-        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+        image_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "images"
+        )
+        self.idle_image = self.load_and_cache_image(
+            os.path.join(image_folder, "idle.png")
+        )
+        self.move_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"move{i}.png"))
+            for i in range(1, 4)
+        ]
+        self.drag_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
+            for i in range(1, 4)
+        ]
+        self.listen_image = self.load_and_cache_image(
+            os.path.join(image_folder, "listen.png")
+        )
+        self.sit_image = self.load_and_cache_image(
+            os.path.join(image_folder, "sit.png")
+        )
+        self.fall_images = [
+            self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
+            for i in range(1, 4)
+        ]
+        self.current_image = self.idle_image
+        self.resize(QPixmap.fromImage(self.current_image).size())
 
-        def load_image_set(base_name, count):
-            return [
-                load_and_cache_image(os.path.join(image_folder, f"{base_name}{i}.png"))
-                for i in range(1, count + 1)
-            ]
-
-        try:
-            self.idle_image = load_and_cache_image(os.path.join(image_folder, "idle.png"))
-            self.move_images = load_image_set("move", 3)
-            self.drag_images = load_image_set("drag", 3)
-            self.sit_image = load_and_cache_image(os.path.join(image_folder, "sit.png"))
-            self.fall_images = load_image_set("fall", 3)
-
-            # 'listen' 이미지를 'sit' 이미지로 대체
-            self.listen_image = self.sit_image
-
-            self.current_image = self.idle_image
-            self.resize(self.current_image.size())
-
-            logging.info("모든 이미지를 성공적으로 로드했습니다.")
-        except Exception as e:
-            logging.error(f"이미지 로딩 중 오류 발생: {str(e)}")
-            # 기본 이미지 설정 (예: 빈 이미지)
-            self.current_image = QImage(100, 100, QImage.Format_ARGB32)
-            self.current_image.fill(Qt.transparent)
-            self.resize(100, 100)
-
-        # 이미지 로딩 확인
-        for attr in [
-            "idle_image",
-            "move_images",
-            "drag_images",
-            "sit_image",
-            "fall_images",
-        ]:
-            if (
-                not hasattr(self, attr)
-                or getattr(self, attr) is None
-                or (isinstance(getattr(self, attr), list) and not getattr(self, attr))
-            ):
-                logging.warning(f"{attr} 이미지를 로드하지 못했습니다.")
+    def load_and_cache_image(self, path):
+        if path not in self.image_cache:
+            image = QImage(path)
+            scaled_image = image.scaled(
+                image.width() * 2,
+                image.height() * 2,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self.image_cache[path] = scaled_image
+        return self.image_cache[path]
 
     def start_auto_move(self):
         if not self.is_listening:
@@ -930,59 +944,68 @@ class VoiceRecognitionThread(QThread):
 
     def run(self):
         try:
-            logging.info("Porcupine 초기화 중...")
-            self.porcupine = pvporcupine.create(
-                access_key=self.access_key,
-                keyword_paths=[self.keyword_path],
-                model_path=self.model_path,
-                sensitivities=[0.5],
-            )
-            logging.info("Porcupine 초기화 완료")
-
-            logging.info("PyAudio 초기화 중...")
-            self.pa = pyaudio.PyAudio()
-            logging.info("PyAudio 초기화 완료")
-
-            # 마이크 초기화
-            self.init_microphone()
-
-            logging.info("오디오 스트림 열기...")
-            self.audio_stream = self.pa.open(
-                rate=self.porcupine.sample_rate,
-                channels=1,
-                format=pyaudio.paInt16,
-                input=True,
-                input_device_index=self.microphone_index,
-                frames_per_buffer=self.porcupine.frame_length,
-            )
-            logging.info("오디오 스트림 열기 완료")
-
-            logging.info("웨이크 워드 감지 시작...")
+            self.init_porcupine()
+            self.init_audio()
+            
             while self.running:
                 pcm = self.audio_stream.read(self.porcupine.frame_length)
                 pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
 
                 keyword_index = self.porcupine.process(pcm)
                 if keyword_index >= 0:
-                    logging.info("웨이크 워드 '아리야' 감지!")
-                    wake_responses = ["네?", "부르셨나요?"]
-                    response = random.choice(wake_responses)
-                    text_to_speech(response)
-                    self.listening_state_changed.emit(True)
-                    self.recognize_speech()
-                    self.listening_state_changed.emit(False)
+                    self.handle_wake_word()
 
         except Exception as e:
             logging.error(f"오류 발생: {str(e)}", exc_info=True)
         finally:
-            logging.info("음성 인식 스레드 종료 중...")
-            if self.audio_stream is not None:
-                self.audio_stream.close()
-            if self.pa is not None:
-                self.pa.terminate()
-            if self.porcupine is not None:
-                self.porcupine.delete()
-            logging.info("음성 인식 스레드 종료 완료")
+            self.cleanup()
+
+    def init_porcupine(self):
+        logging.info("Porcupine 초기화 중...")
+        self.porcupine = pvporcupine.create(
+            access_key=self.access_key,
+            keyword_paths=[self.keyword_path],
+            model_path=self.model_path,
+            sensitivities=[0.5],
+        )
+        logging.info("Porcupine 초기화 완료")
+
+    def init_audio(self):
+        logging.info("PyAudio 초기화 중...")
+        self.pa = pyaudio.PyAudio()
+        logging.info("PyAudio 초기화 완료")
+
+        self.init_microphone()
+
+        logging.info("오디오 스트림 열기...")
+        self.audio_stream = self.pa.open(
+            rate=self.porcupine.sample_rate,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            input_device_index=self.microphone_index,
+            frames_per_buffer=self.porcupine.frame_length,
+        )
+        logging.info("오디오 스트림 열기 완료")
+
+    def handle_wake_word(self):
+        logging.info("웨이크 워드 '아리야' 감지!")
+        wake_responses = ["네?", "부르셨나요?"]
+        response = random.choice(wake_responses)
+        text_to_speech(response)
+        self.listening_state_changed.emit(True)
+        self.recognize_speech()
+        self.listening_state_changed.emit(False)
+
+    def cleanup(self):
+        logging.info("음성 인식 스레드 종료 중...")
+        if self.audio_stream is not None:
+            self.audio_stream.close()
+        if self.pa is not None:
+            self.pa.terminate()
+        if self.porcupine is not None:
+            self.porcupine.delete()
+        logging.info("음성 인식 스레드 종료 완료")
 
     def init_microphone(self):
         if self.selected_microphone:
@@ -1017,7 +1040,6 @@ class VoiceRecognitionThread(QThread):
             logging.error(f"음성 인식 서비스 오류: {e}")
         except Exception as e:
             logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
-
     def stop(self):
         self.running = False
 
@@ -1097,32 +1119,28 @@ class CharacterWidget(QWidget):
 
     def load_images(self):
         image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-        image_types = ['idle', 'walk', 'drag', 'sit', 'fall']
-        image_counts = [8, 9, 8, 9, 8]
+        self.image_sets = {
+            'idle': [self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png")) for i in range(1, 9)],
+            'walk': [self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png")) for i in range(1, 10)],
+            'drag': [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)],
+            'listen': [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)],
+            'sit': [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)],
+            'fall': [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+        }
+        self.current_image = self.image_sets['idle'][0]
+        self.resize(QPixmap.fromImage(self.current_image).size())
 
-        for img_type, count in zip(image_types, image_counts):
-            images = []
-            for i in range(1, count + 1):
-                image_path = os.path.join(image_folder, f"{img_type}{i}.png")
-                if os.path.exists(image_path):
-                    image = load_and_cache_image(image_path)
-                    if not image.isNull():
-                        images.append(image)
-                    else:
-                        logging.error(f"이미지를 로드할 수 없습니다: {image_path}")
-                else:
-                    logging.error(f"이미지 파일이 존재하지 않습니다: {image_path}")
-            
-            setattr(self, f"{img_type}_images", images)
-
-        # listen 이미지를 sit 이미지로 설정
-        self.listen_images = self.sit_images
-
-        if self.idle_images:
-            self.current_image = self.idle_images[0]
-            self.resize(self.current_image.size())
-        else:
-            logging.error("idle 이미지를 로드할 수 없습니다.")
+    def load_and_cache_image(self, path):
+        if path not in self.image_cache:
+            image = QImage(path)
+            scaled_image = image.scaled(
+                image.width() * 1.5,
+                image.height() * 1.5,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            self.image_cache[path] = scaled_image
+        return self.image_cache[path]
 
     def start_auto_move(self):
         if not self.is_listening:
@@ -1176,27 +1194,13 @@ class CharacterWidget(QWidget):
         self.update()
 
     def update_animation(self):
-        action_map = {
-            'falling': self.fall_images,
-            'dragging': self.drag_images,
-            'moving': self.walk_images,
-            'sitting': self.sit_images,
-            'listening': self.sit_images,
-            'idle': self.idle_images
-        }
-
-        current_action = next((action for action, condition in [
-            ('falling', self.falling),
-            ('dragging', self.is_dragging),
-            ('moving', self.is_moving and not self.is_listening),
-            ('sitting', self.current_action == "sit"),
-            ('listening', self.is_listening),
-            ('idle', True)
-        ] if condition), 'idle')
-
-        images = action_map[current_action]
-        self.current_frame = (self.current_frame + 1) % len(images)
-        self.current_image = images[self.current_frame]
+        action = 'fall' if self.falling else (
+            'drag' if self.is_dragging else (
+            'walk' if self.is_moving and not self.is_listening else (
+            'sit' if self.current_action == "sit" or self.is_listening else 'idle'
+        )))
+        self.current_frame = (self.current_frame + 1) % len(self.image_sets[action])
+        self.current_image = self.image_sets[action][self.current_frame]
         self.update()
 
     def paintEvent(self, event):
@@ -1216,7 +1220,7 @@ class CharacterWidget(QWidget):
             self.stop_auto_move()
             if self.current_action == "sit":
                 self.return_to_idle()  # 앉아있는 상태에서 드래그 시 idle 상태로 변경
-            self.current_image = self.drag_images[0]
+            self.current_image = self.image_sets['drag'][0]
             self.update()
         elif event.button() == Qt.RightButton:
             self.show_context_menu(event.pos())
@@ -1254,7 +1258,7 @@ class CharacterWidget(QWidget):
     def sit(self):
         self.stop_auto_move()
         self.current_action = "sit"
-        self.current_image = self.sit_images[0]
+        self.current_image = self.image_sets['sit'][0]
         self.update()
         self.action_timer.stop()  # 앉아있는 동안 자동 행동 타이머 중지
 
@@ -1264,7 +1268,7 @@ class CharacterWidget(QWidget):
 
     def return_to_idle(self):
         self.current_action = "idle"
-        self.current_image = self.idle_images[0]
+        self.current_image = self.image_sets['idle'][0]
         self.update()
         self.action_timer.start(random.randint(15000, 45000))  # 자동 행동 타이머 재시작
 
@@ -1272,13 +1276,13 @@ class CharacterWidget(QWidget):
         self.is_listening = is_listening
         if is_listening:
             self.current_action = "sit"
-            self.current_image = self.sit_images[0]
+            self.current_image = self.image_sets['sit'][0]
             self.stop_auto_move()
             self.action_timer.stop()
             self.action_duration_timer.stop()
         else:
             self.current_action = "idle"
-            self.current_image = self.idle_images[0]
+            self.current_image = self.image_sets['idle'][0]
             self.start_auto_move()
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
@@ -1381,6 +1385,10 @@ class MainWindow(QMainWindow):
             "Ari", "TTS 및 Whisper 모델 로딩 중...", QSystemTrayIcon.Information, 3000
         )
 
+        self.resource_monitor = ResourceMonitor()
+        self.resource_monitor.gc_needed.connect(perform_gc)
+        self.resource_monitor.start()
+
     def initUI(self):
         self.microphone_label = QLabel("마이크 선택:", self)
         self.microphone_label.setGeometry(20, 50, 80, 30)
@@ -1417,6 +1425,8 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
+        self.resource_monitor.stop()
+        self.resource_monitor.wait()
         event.ignore()
         self.hide()
 
@@ -1437,55 +1447,9 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
 
-def auto_optimize(func):
-    def wrapper(*args, **kwargs):
-        pr = cProfile.Profile()
-        pr.enable()
-        result = func(*args, **kwargs)
-        pr.disable()
-        s = io.StringIO()
-        ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
-        ps.print_stats()
-
-        # 프로파일링 결과 분석
-        lines = s.getvalue().split("\n")
-        for line in lines[5:]:  # 상위 5개 결과를 무시
-            if line.strip() and not line.startswith("   ncalls"):
-                parts = line.split()
-                if len(parts) >= 6:
-                    func_name = parts[5]
-                    if "/" in func_name:
-                        func_name = func_name.split("/")[-1]
-                    if ":" in func_name:
-                        func_name = func_name.split(":")[0]
-
-                    # 가장 시간이 많이 소요되는 함수에 대해 최적화 시도
-                    if hasattr(globals()[func_name], "__code__"):
-                        optimize_function(globals()[func_name])
-                    break
-
-        return result
-
-    return wrapper
-
-
-def optimize_function(func):
-    # 간단한 최적화: lru_cache 적용
-    if not hasattr(func, "cache_info"):
-        optimized_func = lru_cache(maxsize=None)(func)
-        globals()[func.__name__] = optimized_func
-        print(f"함수 '{func.__name__}'에 lru_cache를 적용했습니다.")
-
-
-@auto_optimize
 def main():
     global ai_assistant, icon_path
     setproctitle.setproctitle("Ari Voice Command")
-
-    # 프로파일링 시작
-    pr = cProfile.Profile()
-    pr.enable()
-
     try:
         setup_logging()
         logging.info("프로그램 시작")
@@ -1544,6 +1508,8 @@ def main():
         app.aboutToQuit.connect(voice_thread.stop)
         app.aboutToQuit.connect(voice_thread.wait)
         app.aboutToQuit.connect(tray_icon.exit)
+        app.aboutToQuit.connect(main_window.resource_monitor.stop)
+        app.aboutToQuit.connect(main_window.resource_monitor.wait)
 
         sys.exit(app.exec())
     except Exception as e:
