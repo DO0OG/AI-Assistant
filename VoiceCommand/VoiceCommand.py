@@ -60,6 +60,7 @@ whisper_model = None
 ai_assistant = None
 icon_path = None
 volume = None
+active_timer = None
 
 try:
     ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
@@ -86,12 +87,6 @@ if not os.path.exists(icon_path):
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# 전역 변수로 TTS 모델 선언
-tts_model = None
-speaker_ids = None
-
-# 전역 변수로 Whisper 모델 선언
-whisper_model = None
 
 # 볼륨 제어를 위한 설정
 devices = AudioUtilities.GetSpeakers()
@@ -174,12 +169,30 @@ def shutdown_computer():
         os.system("sudo shutdown -h now")
 
 
-def set_timer(minutes):
-    def timer_thread():
-        time.sleep(minutes * 60)
-        text_to_speech(f"{minutes}분 타이머가 완료되었습니다.")
+def cancel_timer():
+    global active_timer
+    if active_timer:
+        active_timer.cancel()
+        active_timer = None
+        text_to_speech("타이머가 취소되었습니다.")
+    else:
+        text_to_speech("현재 실행 중인 타이머가 없습니다.")
 
-    threading.Thread(target=timer_thread).start()
+
+def set_timer(minutes):
+    global active_timer
+
+    def timer_thread():
+        global active_timer
+        time.sleep(minutes * 60)
+        if active_timer:  # 타이머가 취소되지 않았다면
+            text_to_speech(f"{minutes}분 타이머가 완료되었습니다.")
+            active_timer = None
+
+    if active_timer:
+        active_timer.cancel()
+    active_timer = threading.Timer(minutes * 60, timer_thread)
+    active_timer.start()
     text_to_speech(f"{minutes}분 타이머를 설정했습니다.")
 
 
@@ -278,7 +291,10 @@ def execute_command(command):
         volume.SetMute(0, None)
         text_to_speech("음소거가 해제되었습니다.")
     elif "타이머" in command:
-        set_timer_from_command(command)
+        if "취소" in command or "끄기" in command or "중지" in command:
+            cancel_timer()
+        else:
+            set_timer_from_command(command)
     elif "몇 시야" in command:
         current_time = get_current_time()
         response = f"현재 시간은 {current_time}입니다."
