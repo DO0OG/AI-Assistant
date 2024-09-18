@@ -31,6 +31,7 @@ import ctypes
 import threading
 from queue import Queue
 import time
+import textwrap
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -41,7 +42,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from PySide6.QtGui import QIcon, QAction, QPainter, QPixmap, QImage
+from PySide6.QtGui import QIcon, QAction, QPainter, QPixmap, QImage, QFont, QFontDatabase, QColor, QFontMetrics
 from PySide6.QtCore import (
     QThread,
     Signal,
@@ -50,6 +51,11 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QEasingCurve,
+    QMetaObject,
+    Qt,
+    Q_ARG,
+    QRect,
+    Slot,
 )
 from melo.api import TTS
 from pydub import AudioSegment
@@ -191,8 +197,16 @@ def text_to_speech(text):
 
         # TTS 재생 전에 음성 인식을 비활성화
         app = QApplication.instance()
-        if app and hasattr(app, "voice_thread") and app.voice_thread:
-            app.voice_thread.is_tts_playing = True
+        main_window = next((w for w in app.topLevelWidgets() if isinstance(w, MainWindow)), None)
+        if main_window and hasattr(main_window, "voice_thread") and main_window.voice_thread:
+            main_window.voice_thread.is_tts_playing = True
+
+        # 말풍선 표시
+        if main_window and hasattr(main_window, "tray_icon"):
+            for character in main_window.tray_icon.character_widgets:
+                QMetaObject.invokeMethod(character, "show_speech_bubble", 
+                                         Qt.QueuedConnection, 
+                                         Q_ARG(str, text))
 
         # pydub를 사용하여 오디오 재생
         sound = AudioSegment.from_file(output_path)
@@ -200,8 +214,8 @@ def text_to_speech(text):
         os.remove(output_path)  # 오디오 파일 삭제
 
         # TTS 재생 후에 음성 인식을 다시 활성화
-        if app and hasattr(app, "voice_thread") and app.voice_thread:
-            app.voice_thread.is_tts_playing = False
+        if main_window and hasattr(main_window, "voice_thread") and main_window.voice_thread:
+            main_window.voice_thread.is_tts_playing = False
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
@@ -1055,6 +1069,7 @@ class CharacterWidget(QWidget):
     exit_signal = Signal()
     toggle_voice_recognition = Signal()
     set_listening_state_signal = Signal(bool)
+    show_speech_bubble_signal = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1079,6 +1094,18 @@ class CharacterWidget(QWidget):
         self.falling = False
         self.fall_frame = 0
 
+        self.speech_bubble = None
+        self.speech_timer = QTimer(self)
+        self.speech_timer.timeout.connect(self.hide_speech_bubble)
+
+        # 폰트 로드
+        font_id = QFontDatabase.addApplicationFont("DNFBitBitv2.ttf")
+        if font_id != -1:
+            self.font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+        else:
+            logging.warning("DNFBitBitv2.ttf 폰트를 로드할 수 없습니다. 기본 폰트를 사용합니다.")
+            self.font_family = QFont().family()
+
         self.initUI()
         self.load_images()
         self.start_auto_move()
@@ -1086,6 +1113,8 @@ class CharacterWidget(QWidget):
         self.animation_thread = CharacterAnimationThread(self)
         self.animation_thread.update_signal.connect(self.update_animation)
         self.animation_thread.start()
+
+        self.show_speech_bubble_signal.connect(self._show_speech_bubble)
 
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
@@ -1215,6 +1244,9 @@ class CharacterWidget(QWidget):
             painter.drawPixmap(self.rect(), QPixmap.fromImage(flipped_image))
         else:
             painter.drawPixmap(self.rect(), QPixmap.fromImage(self.current_image))
+
+        if self.speech_bubble:
+            self.speech_bubble.update_position()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -1361,6 +1393,84 @@ class CharacterWidget(QWidget):
             self.current_image = self.walk_images[self.current_frame]
             self.facing_left = dx < 0
             self.update()
+
+    @Slot(str)
+    def show_speech_bubble(self, text):
+        # 메인 스레드에서 실행되도록 시그널 발생
+        self.show_speech_bubble_signal.emit(text)
+
+    @Slot(str)
+    def _show_speech_bubble(self, text):
+        if self.speech_bubble:
+            self.speech_bubble.hide()
+
+        self.speech_bubble = SpeechBubble(text, self)
+        self.speech_bubble.show()
+
+        # 5초 후에 말풍선 숨기기
+        QTimer.singleShot(5000, self.hide_speech_bubble)
+
+    @Slot()
+    def hide_speech_bubble(self):
+        if self.speech_bubble:
+            self.speech_bubble.hide()
+            self.speech_bubble = None
+            self.speech_bubble = None
+
+
+class SpeechBubble(QWidget):
+    def __init__(self, text, parent):
+        super().__init__(parent)
+        self.text = text
+        self.parent = parent
+        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.font = QFont(parent.font_family, 12)
+        self.fm = QFontMetrics(self.font)
+        self.padding = 10
+        self.calculate_size()
+        self.update_position()
+
+    def calculate_size(self):
+        max_width = 300  # 최대 너비
+        text_width = self.fm.horizontalAdvance(self.text)
+        if text_width <= max_width:
+            # 한 줄로 표시 가능한 경우
+            self.bubble_width = text_width + self.padding * 2
+            self.bubble_height = self.fm.height() + self.padding * 2
+        else:
+            # 여러 줄로 표시해야 하는 경우
+            self.bubble_width = max_width
+            rect = self.fm.boundingRect(
+                QRect(0, 0, max_width, 1000), Qt.TextWordWrap, self.text
+            )
+            self.bubble_height = rect.height() + self.padding * 2
+
+        self.setFixedSize(self.bubble_width, self.bubble_height)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # 말풍선 그리기
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 200))
+        painter.drawRoundedRect(self.rect(), 10, 10)
+
+        # 텍스트 그리기
+        painter.setPen(Qt.black)
+        painter.setFont(self.font)
+        text_rect = self.rect().adjusted(
+            self.padding, self.padding, -self.padding, -self.padding
+        )
+        painter.drawText(text_rect, Qt.AlignCenter | Qt.TextWordWrap, self.text)
+
+    def update_position(self):
+        parent_rect = self.parent.rect()
+        parent_pos = self.parent.mapToGlobal(parent_rect.topLeft())
+        x = parent_pos.x() + (parent_rect.width() - self.bubble_width) // 2
+        y = parent_pos.y() - self.bubble_height - 10
+        self.move(x, y)
 
 
 # TTS 스레드
