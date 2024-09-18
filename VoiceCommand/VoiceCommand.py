@@ -1050,50 +1050,6 @@ class VoiceRecognitionThread(QThread):
         self.selected_microphone = microphone_name
         self.init_microphone()
 
-class TTSThread(QThread):
-    def __init__(self):
-        super().__init__()
-        self.queue = Queue()
-
-    def run(self):
-        while True:
-            text = self.queue.get()
-            if text is None:
-                break
-            text_to_speech(text)
-            self.queue.task_done()
-
-    def speak(self, text):
-        self.queue.put(text)
-
-class CommandExecutionThread(QThread):
-    def __init__(self):
-        super().__init__()
-        self.queue = Queue()
-
-    def run(self):
-        while True:
-            command = self.queue.get()
-            if command is None:
-                break
-            execute_command(command)
-            self.queue.task_done()
-
-    def execute(self, command):
-        self.queue.put(command)
-
-class CharacterAnimationThread(QThread):
-    update_signal = Signal()
-
-    def __init__(self, character_widget):
-        super().__init__()
-        self.character_widget = character_widget
-
-    def run(self):
-        while True:
-            time.sleep(0.1)  # 100ms마다 업데이트
-            self.update_signal.emit()
-
 
 class CharacterWidget(QWidget):
     exit_signal = Signal()
