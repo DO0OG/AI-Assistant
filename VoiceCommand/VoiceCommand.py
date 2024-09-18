@@ -28,6 +28,9 @@ import pvporcupine
 import pyaudio
 import struct
 import ctypes
+import threading
+from queue import Queue
+import time
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -177,7 +180,7 @@ class ModelLoadingThread(QThread):
 
 
 def text_to_speech(text):
-    global tts_model, speaker_ids
+    global tts_model, speaker_ids, tts_thread
     if tts_model is None or speaker_ids is None:
         logging.error("TTS 모델이 초기화되지 않았습니다.")
         return
@@ -914,7 +917,6 @@ class SystemTrayIcon(QSystemTrayIcon):
         for character in self.character_widgets:
             character.start_random_move()
 
-
 class VoiceRecognitionThread(QThread):
     result = Signal(str)
     listening_state_changed = Signal(bool)
@@ -1040,12 +1042,57 @@ class VoiceRecognitionThread(QThread):
             logging.error(f"음성 인식 서비스 오류: {e}")
         except Exception as e:
             logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
+
     def stop(self):
         self.running = False
 
     def set_microphone(self, microphone_name):
         self.selected_microphone = microphone_name
         self.init_microphone()
+
+class TTSThread(QThread):
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+
+    def run(self):
+        while True:
+            text = self.queue.get()
+            if text is None:
+                break
+            text_to_speech(text)
+            self.queue.task_done()
+
+    def speak(self, text):
+        self.queue.put(text)
+
+class CommandExecutionThread(QThread):
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+
+    def run(self):
+        while True:
+            command = self.queue.get()
+            if command is None:
+                break
+            execute_command(command)
+            self.queue.task_done()
+
+    def execute(self, command):
+        self.queue.put(command)
+
+class CharacterAnimationThread(QThread):
+    update_signal = Signal()
+
+    def __init__(self, character_widget):
+        super().__init__()
+        self.character_widget = character_widget
+
+    def run(self):
+        while True:
+            time.sleep(0.1)  # 100ms마다 업데이트
+            self.update_signal.emit()
 
 
 class CharacterWidget(QWidget):
@@ -1080,9 +1127,9 @@ class CharacterWidget(QWidget):
         self.load_images()
         self.start_auto_move()
 
-        self.animation_timer = QTimer(self)
-        self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_timer.start(100)  # 100ms마다 애니메이션 업데이트
+        self.animation_thread = CharacterAnimationThread(self)
+        self.animation_thread.update_signal.connect(self.update_animation)
+        self.animation_thread.start()
 
     def initUI(self):
         self.setGeometry(100, 100, 100, 100)
@@ -1360,6 +1407,56 @@ class CharacterWidget(QWidget):
             self.update()
 
 
+# TTS 스레드
+class TTSThread(QThread):
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+
+    def run(self):
+        while True:
+            text = self.queue.get()
+            if text is None:
+                break
+            text_to_speech(text)
+            self.queue.task_done()
+
+    def speak(self, text):
+        self.queue.put(text)
+
+
+# 명령 실행 스레드
+class CommandExecutionThread(QThread):
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+
+    def run(self):
+        while True:
+            command = self.queue.get()
+            if command is None:
+                break
+            execute_command(command)
+            self.queue.task_done()
+
+    def execute(self, command):
+        self.queue.put(command)
+
+
+# 캐릭터 애니메이션 스레드
+class CharacterAnimationThread(QThread):
+    update_signal = Signal()
+
+    def __init__(self, character_widget):
+        super().__init__()
+        self.character_widget = character_widget
+
+    def run(self):
+        while True:
+            time.sleep(0.1)  # 100ms마다 업데이트
+            self.update_signal.emit()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1388,6 +1485,19 @@ class MainWindow(QMainWindow):
         self.resource_monitor = ResourceMonitor()
         self.resource_monitor.gc_needed.connect(perform_gc)
         self.resource_monitor.start()
+
+        self.voice_thread = VoiceRecognitionThread()
+        self.tts_thread = TTSThread()
+        self.command_thread = CommandExecutionThread()
+
+        self.voice_thread.result.connect(self.handle_voice_result)
+        self.voice_thread.listening_state_changed.connect(
+            self.update_listening_state
+        )
+
+        self.voice_thread.start()
+        self.tts_thread.start()
+        self.command_thread.start()
 
     def initUI(self):
         self.microphone_label = QLabel("마이크 선택:", self)
@@ -1427,6 +1537,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.resource_monitor.stop()
         self.resource_monitor.wait()
+        self.voice_thread.stop()
+        self.tts_thread.queue.put(None)
+        self.command_thread.queue.put(None)
+        self.voice_thread.wait()
+        self.tts_thread.wait()
+        self.command_thread.wait()
         event.ignore()
         self.hide()
 
@@ -1446,9 +1562,17 @@ class MainWindow(QMainWindow):
         self.show()
         self.activateWindow()
 
+    def handle_voice_result(self, text):
+        logging.info(f"인식된 명령: {text}")
+        self.command_thread.execute(text)
+
+    def update_listening_state(self, is_listening):
+        for character in self.tray_icon.character_widgets:
+            character.set_listening_state(is_listening)
+
 
 def main():
-    global ai_assistant, icon_path
+    global ai_assistant, icon_path, tts_thread
     setproctitle.setproctitle("Ari Voice Command")
     try:
         setup_logging()
@@ -1470,6 +1594,7 @@ def main():
         main_window.show()
 
         tray_icon = main_window.tray_icon
+        tts_thread = main_window.tts_thread
 
         # AI 어시스턴트 초기화
         try:
@@ -1478,35 +1603,20 @@ def main():
             logging.error(f"AI 어시스턴트 초기화 실패: {str(e)}")
             sys.exit(1)
 
-        # 음성 인식 스레드 생성 및 시작
-        try:
-            voice_thread = VoiceRecognitionThread()
-            voice_thread.start()
-            logging.info("음성 인식 스레드 시작됨")
-        except Exception as e:
-            logging.error(f"음성 인식 스레드 시작 실패: {str(e)}")
-            sys.exit(1)
-
-        # 음성 인식 결과 처리
-        def handle_voice_result(text):
-            logging.info(f"인식된 명령: {text}")
-            execute_command(text)
-
-        voice_thread.result.connect(handle_voice_result)
-        voice_thread.listening_state_changed.connect(
-            main_window.tray_icon.character_widgets[0].set_listening_state
-        )
-
         # 마이크 설정 변경 시 음성 인식 스레드에 알림
         def update_microphone():
             selected_microphone = main_window.microphone_combo.currentText()
-            voice_thread.set_microphone(selected_microphone)
+            main_window.voice_thread.set_microphone(selected_microphone)
 
         main_window.save_button.clicked.connect(update_microphone)
 
         # 종료 시 정리
-        app.aboutToQuit.connect(voice_thread.stop)
-        app.aboutToQuit.connect(voice_thread.wait)
+        app.aboutToQuit.connect(main_window.voice_thread.stop)
+        app.aboutToQuit.connect(main_window.voice_thread.wait)
+        app.aboutToQuit.connect(main_window.tts_thread.queue.put)
+        app.aboutToQuit.connect(main_window.command_thread.queue.put)
+        app.aboutToQuit.connect(main_window.tts_thread.wait)
+        app.aboutToQuit.connect(main_window.command_thread.wait)
         app.aboutToQuit.connect(tray_icon.exit)
         app.aboutToQuit.connect(main_window.resource_monitor.stop)
         app.aboutToQuit.connect(main_window.resource_monitor.wait)
