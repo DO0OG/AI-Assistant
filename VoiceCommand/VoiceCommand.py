@@ -1538,8 +1538,8 @@ class MainWindow(QMainWindow):
         self.resource_monitor.stop()
         self.resource_monitor.wait()
         self.voice_thread.stop()
-        self.tts_thread.queue.put(None)
-        self.command_thread.queue.put(None)
+        self.tts_thread.queue.put(None)  # None을 큐에 추가
+        self.command_thread.queue.put(None)  # None을 큐에 추가
         self.voice_thread.wait()
         self.tts_thread.wait()
         self.command_thread.wait()
@@ -1613,8 +1613,8 @@ def main():
         # 종료 시 정리
         app.aboutToQuit.connect(main_window.voice_thread.stop)
         app.aboutToQuit.connect(main_window.voice_thread.wait)
-        app.aboutToQuit.connect(main_window.tts_thread.queue.put)
-        app.aboutToQuit.connect(main_window.command_thread.queue.put)
+        app.aboutToQuit.connect(lambda: main_window.tts_thread.queue.put(None))
+        app.aboutToQuit.connect(lambda: main_window.command_thread.queue.put(None))
         app.aboutToQuit.connect(main_window.tts_thread.wait)
         app.aboutToQuit.connect(main_window.command_thread.wait)
         app.aboutToQuit.connect(tray_icon.exit)
