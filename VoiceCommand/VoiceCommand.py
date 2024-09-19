@@ -31,7 +31,11 @@ import ctypes
 import threading
 from queue import Queue
 import time
-import textwrap
+import requests
+from datetime import datetime, timedelta
+import math
+from geopy.geocoders import Nominatim
+from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -308,6 +312,137 @@ def get_current_time():
     return now.strftime("%H시 %M분")
 
 
+def get_current_location():
+    try:
+        # 외부 IP를 기반으로 위치 정보 가져오기
+        ip_response = requests.get("https://ipapi.co/json/")
+        ip_data = ip_response.json()
+        latitude = ip_data.get("latitude", 37.5665)  # 기본값은 서울의 위도
+        longitude = ip_data.get("longitude", 126.9780)  # 기본값은 서울의 경도
+
+        logging.info(f"IP 기반 위치: 위도 {latitude}, 경도 {longitude}")
+
+        # 한국 내 위치인지 확인
+        if 33 <= latitude <= 38 and 124 <= longitude <= 132:
+            return latitude, longitude
+        else:
+            logging.warning("현재 위치가 한국 밖입니다. 서울의 좌표를 사용합니다.")
+            return 37.5665, 126.9780  # 서울의 위도, 경도
+    except Exception as e:
+        logging.error(f"위치 정보 가져오기 실패: {str(e)}")
+        return 37.5665, 126.9780  # 오류 발생 시 서울의 좌표 반환
+
+
+def get_weather_info(lat, lon):
+    base_url = (
+        "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
+    )
+    service_key = "ZO09DoJ82chWByT90/AzM5s2E/kdr9RvKDfqKwjKAbSalpbHl50Soh03SodDkXmsxqFPFwhYtA6lWpyUDDtV2g=="
+
+    now = datetime.now()
+    base_date = now.strftime("%Y%m%d")
+    base_time = (now - timedelta(hours=1)).strftime("%H00")
+
+    nx, ny = convert_coord(lat, lon)
+
+    params = {
+        "serviceKey": service_key,
+        "pageNo": "1",
+        "numOfRows": "1000",
+        "dataType": "JSON",
+        "base_date": base_date,
+        "base_time": base_time,
+        "nx": str(nx),
+        "ny": str(ny),
+    }
+
+    logging.info(f"API 요청 파라미터: {params}")
+
+    try:
+        response = requests.get(base_url, params=params, verify=False)
+        response.raise_for_status()
+
+        logging.info(f"API 응답: {response.text}")
+
+        data = response.json()
+
+        if data['response']['header']['resultCode'] == '00':
+            items = data['response']['body']['items']['item']
+            
+            weather_info = {}
+            for item in items:
+                category = item['category']
+                value = item['obsrValue']
+                weather_info[category] = value
+            
+            temp = float(weather_info.get('T1H', 'N/A'))
+            humidity = int(weather_info.get('REH', 'N/A'))
+            rain = float(weather_info.get('RN1', '0'))
+            
+            weather_status = "맑음"
+            if rain > 0:
+                weather_status = "비"
+            elif int(weather_info.get('PTY', '0')) > 0:
+                weather_status = "눈 또는 비"
+            
+            # 소수점을 "점"으로 바꾸고, 숫자를 읽기 쉽게 조정
+            temp_str = f"{int(temp)}점 {int((temp % 1) * 10)}"
+            rain_str = f"{int(rain)}점 {int((rain % 1) * 10)}"
+
+            return (f"현재 날씨는 {weather_status}입니다. "
+                    f"기온은 {temp_str}도, 습도는 {humidity}퍼센트, "
+                    f"강수량은 {rain_str}밀리미터입니다.")
+        else:
+            logging.error(f"API 오류: {data['response']['header']['resultMsg']}")
+            return "날씨 정보를 가져오는 데 실패했습니다."
+    except requests.exceptions.RequestException as e:
+        logging.error(f"요청 오류: {str(e)}")
+        return "날씨 정보를 가져오는 데 실패했습니다."
+    except ValueError as e:
+        logging.error(f"JSON 파싱 오류: {str(e)}")
+        return "날씨 정보를 가져오는 데 실패했습니다."
+
+
+def convert_coord(lat, lon):
+    # 위경도를 기상청 격자 좌표로 변환하는 함수
+    RE = 6371.00877  # 지구 반경(km)
+    GRID = 5.0  # 격자 간격(km)
+    SLAT1 = 30.0  # 투영 위도1(degree)
+    SLAT2 = 60.0  # 투영 위도2(degree)
+    OLON = 126.0  # 기준점 경도(degree)
+    OLAT = 38.0  # 기준점 위도(degree)
+    XO = 43  # 기준점 X좌표(GRID)
+    YO = 136  # 기준점 Y좌표(GRID)
+
+    DEGRAD = math.pi / 180.0
+    re = RE / GRID
+    slat1 = SLAT1 * DEGRAD
+    slat2 = SLAT2 * DEGRAD
+    olon = OLON * DEGRAD
+    olat = OLAT * DEGRAD
+
+    sn = math.tan(math.pi * 0.25 + slat2 * 0.5) / math.tan(math.pi * 0.25 + slat1 * 0.5)
+    sn = math.log(math.cos(slat1) / math.cos(slat2)) / math.log(sn)
+    sf = math.tan(math.pi * 0.25 + slat1 * 0.5)
+    sf = math.pow(sf, sn) * math.cos(slat1) / sn
+    ro = math.tan(math.pi * 0.25 + olat * 0.5)
+    ro = re * sf / math.pow(ro, sn)
+
+    ra = math.tan(math.pi * 0.25 + lat * DEGRAD * 0.5)
+    ra = re * sf / math.pow(ra, sn)
+    theta = lon * DEGRAD - olon
+    if theta > math.pi:
+        theta -= 2.0 * math.pi
+    if theta < -math.pi:
+        theta += 2.0 * math.pi
+    theta *= sn
+
+    x = math.floor(ra * math.sin(theta) + XO + 0.5)
+    y = math.floor(ro - ra * math.cos(theta) + YO + 0.5)
+
+    return int(x), int(y)
+
+
 def execute_command(command):
     logging.info(f"실행할 명령: {command}")
 
@@ -363,6 +498,15 @@ def execute_command(command):
         shutdown_computer()
     elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
         set_shutdown_timer_from_command(command)
+    elif "날씨 어때" in command:
+        try:
+            lat, lon = get_current_location()
+            logging.info(f"현재 위치: 위도 {lat}, 경도 {lon}")
+            weather_info = get_weather_info(lat, lon)
+            text_to_speech(weather_info)
+        except Exception as e:
+            logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
+            text_to_speech("날씨 정보를 가져오는 데 실패했습니다.")
     else:
         response = ai_assistant.process_query(command)
         text_to_speech(response)
