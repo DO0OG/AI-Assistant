@@ -220,6 +220,12 @@ def text_to_speech(text):
         # TTS 재생 후에 음성 인식을 다시 활성화
         if main_window and hasattr(main_window, "voice_thread") and main_window.voice_thread:
             main_window.voice_thread.is_tts_playing = False
+
+        # 말풍선 숨기기
+        if main_window and hasattr(main_window, "tray_icon"):
+            for character in main_window.tray_icon.character_widgets:
+                character.hide_speech_bubble()
+                
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
@@ -1550,9 +1556,6 @@ class CharacterWidget(QWidget):
 
         self.speech_bubble = SpeechBubble(text, self)
         self.speech_bubble.show()
-
-        # 5초 후에 말풍선 숨기기
-        QTimer.singleShot(5000, self.hide_speech_bubble)
 
     @Slot()
     def hide_speech_bubble(self):
