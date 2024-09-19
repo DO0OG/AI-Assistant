@@ -1,52 +1,79 @@
 import os
+import glob
 from llama_cpp import Llama
+import requests
 
 
 class AIAssistant:
-    def __init__(self, model_path):
+    def __init__(self):
         self.model = None
+        self.use_api = False
         try:
-            # GPU 사용 가능 여부 확인
-            n_gpu_layers = 30
+            model_path = self.find_gguf_model()
+            if model_path:
+                # GPU 사용 가능 여부 확인
+                n_gpu_layers = 30
 
-            print("GPU에서 모델을 로드하려고 시도 중...")
-            try:
-                self.model = Llama(
-                    model_path=model_path,
-                    n_gpu_layers=n_gpu_layers,  # GPU에서 레이어 실행 시도
-                    n_ctx=2048,
-                    verbose=True,  # 디버그 정보 출력
-                )
-                print("GPU를 사용하여 모델을 성공적으로 로드했습니다.")
-            except Exception as gpu_error:
-                print(f"GPU 사용에 실패했습니다: {str(gpu_error)}")
-                print("CPU를 사용하여 모델을 로드합니다...")
-                self.model = Llama(
-                    model_path=model_path,
-                    n_gpu_layers=0,  # CPU 전용으로 실행
-                    n_ctx=2048,
-                    verbose=True,
-                )
-                print("CPU를 사용하여 모델을 성공적으로 로드했습니다.")
-
-            print(f"모델 로드 완료: {model_path}")
+                print(f"GPU에서 모델을 로드하려고 시도 중... 모델 경로: {model_path}")
+                try:
+                    self.model = Llama(
+                        model_path=model_path,
+                        n_gpu_layers=n_gpu_layers,
+                        n_ctx=2048,
+                        verbose=True,
+                    )
+                    print("GPU를 사용하여 모델을 성공적으로 로드했습니다.")
+                except Exception as gpu_error:
+                    print(f"GPU 사용에 실패했습니다: {str(gpu_error)}")
+                    print("CPU를 사용하여 모델을 로드합니다...")
+                    self.model = Llama(
+                        model_path=model_path,
+                        n_gpu_layers=0,
+                        n_ctx=2048,
+                        verbose=True,
+                    )
+                    print("CPU를 사용하여 모델을 성공적으로 로드했습니다.")
+            else:
+                raise FileNotFoundError("GGUF 모델 파일을 찾을 수 없습니다.")
         except Exception as e:
-            print(f"모델 로드 중 오류 발생: {str(e)}")
-            raise
+            print(f"로컬 모델 로드 중 오류 발생: {str(e)}")
+            print("무료 API를 사용하여 계속합니다...")
+            self.use_api = True
+
+    def find_gguf_model(self):
+        model_dir = os.path.join(os.path.dirname(__file__), "models")
+        gguf_files = glob.glob(os.path.join(model_dir, "*.gguf"))
+        return gguf_files[0] if gguf_files else None
 
     def generate_response(self, prompt):
+        if self.use_api:
+            return self.generate_response_api(prompt)
+        else:
+            try:
+                response = self.model(
+                    prompt,
+                    max_tokens=300,
+                    temperature=0.7,
+                    top_p=0.9,
+                    repeat_penalty=1.3,
+                    stop=["주인님:", "\n\n"],
+                )
+                return response["choices"][0]["text"].strip()
+            except Exception as e:
+                print(f"응답 생성 중 오류 발생: {str(e)}")
+                return "죄송합니다, 응답을 생성하는 중 오류가 발생했습니다."
+
+    def generate_response_api(self, prompt):
+        API_URL = "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill"
+        headers = {"Content-Type": "application/json"}
+        data = {"inputs": prompt}
+
         try:
-            response = self.model(
-                prompt,
-                max_tokens=300,
-                temperature=0.7,
-                top_p=0.9,
-                repeat_penalty=1.3,
-                stop=["주인님:", "\n\n"],
-            )
-            return response["choices"][0]["text"].strip()
+            response = requests.post(API_URL, headers=headers, json=data)
+            response.raise_for_status()
+            return response.json()[0]["generated_text"]
         except Exception as e:
-            print(f"응답 생성 중 오류 발생: {str(e)}")
+            print(f"API 응답 생성 중 오류 발생: {str(e)}")
             return "죄송합니다, 응답을 생성하는 중 오류가 발생했습니다."
 
     def process_query(self, query):
@@ -101,18 +128,8 @@ class AIAssistant:
         return response
 
 
-# 모델 경로 설정 (절대 경로 사용)
-def get_model_path():
-    return os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "models",
-            "DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q4_K_M.gguf",
-        )
-    )
-
-
 # AIAssistant 클래스의 인스턴스를 생성하는 함수
 def get_ai_assistant():
-    model_path = get_model_path()
-    return AIAssistant(model_path)
+    return AIAssistant()
+
+# get_model_path 함수는 더 이상 필요하지 않으므로 제거
