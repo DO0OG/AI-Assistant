@@ -6,7 +6,7 @@ import webbrowser
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
-import keyboard
+import json
 import time
 import logging
 from datetime import datetime
@@ -96,6 +96,15 @@ icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 if not os.path.exists(icon_path):
     print(f"경고: 아이콘 파일을 찾을 수 없습니다: {icon_path}")
     icon_path = None  # 아이콘 파일이 없을 경우 None으로
+
+
+# 설정 파일에서 API 키 로드
+def load_config():
+    with open("config.json", "r") as f:
+        return json.load(f)
+
+
+config = load_config()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -343,7 +352,7 @@ def get_weather_info(lat, lon):
     base_url = (
         "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
     )
-    service_key = "ZO09DoJ82chWByT90/AzM5s2E/kdr9RvKDfqKwjKAbSalpbHl50Soh03SodDkXmsxqFPFwhYtA6lWpyUDDtV2g=="
+    service_key = config["weather_api_key"]
 
     now = datetime.now()
     base_date = now.strftime("%Y%m%d")
@@ -1093,7 +1102,7 @@ class VoiceRecognitionThread(QThread):
         self.audio_stream = None
         self.selected_microphone = selected_microphone
         self.microphone_index = None
-        self.access_key = "erEfeU9UFAe9i9gYVMOvnXY4Ryx5Pu+ldZ1dE22USnH4OdEIkeh8Yg=="  # Picovoice 콘솔에서 받은 액세스 키
+        self.access_key = config["picovoice_access_key"]  # Picovoice 콘솔에서 받은 액세스 키
         # 현재 스크립트 파일의 디렉토리 경로를 가져옵니다
         current_dir = os.path.dirname(os.path.abspath(__file__))
 
