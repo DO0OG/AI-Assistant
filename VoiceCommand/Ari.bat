@@ -32,4 +32,16 @@
 ::
 ::978f952a14a936cc963da21a135fa983
 @echo off
-start pythonw "%~dp0VoiceCommand.py"
+setlocal
+
+REM ë¡œê·¸ ?Œì¼ ê²½ë¡œ ?¤ì •
+set logFile=logfile.log
+
+REM ?„ìž¬ ?´ë”???ˆëŠ” VoiceCommand.py ?¤í–‰
+set pythonPath=pythonw
+set scriptPath=VoiceCommand.py
+
+REM pythonw ?¤í–‰ ë°?ë¡œê·¸ ê¸°ë¡ (ì½˜ì†” ì°??†ì´)
+start /B %pythonPath% %scriptPath% >> %logFile% 2>&1
+
+endlocal
