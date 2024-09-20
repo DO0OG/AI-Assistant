@@ -24,9 +24,11 @@ Section "Python 3.11.4" SEC_PYTHON
   ${Else}
     MessageBox MB_YESNO "Python 3.11.4를 설치해야 합니다. 지금 설치하시겠습니까?" IDYES installPython IDNO endPython
     installPython:
+      ; Python 설치 파일 다운로드
+      SetOutPath $TEMP
       File "python-3.11.4-amd64.exe"
-      ExecWait '"$INSTDIR\python-3.11.4-amd64.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0'
-      Delete "$INSTDIR\python-3.11.4-amd64.exe"
+      ExecWait '"$TEMP\python-3.11.4-amd64.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0'
+      Delete "$TEMP\python-3.11.4-amd64.exe"
     endPython:
   ${EndIf}
 SectionEnd
