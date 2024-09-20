@@ -28,6 +28,15 @@ def main():
         "pvporcupine",
         "comtypes",
         "pywin32",
+        "geopy",
+        "requests",
+        "psutil",
+        "py2exe",
+        "setproctitle",
+        "urllib3",
+        "datetime",
+        "python-dotenv",
+        "pyinstaller"
     ]
 
     with open("requirements.txt", "w") as f:
@@ -53,18 +62,6 @@ def main():
     except subprocess.CalledProcessError:
         print("MeloTTS 설치 중 오류가 발생했습니다.")
         return
-
-    print("추가 패키지를 설치합니다...")
-
-    # 추가 패키지 설치
-    additional_packages = ["pyinstaller", "python-dotenv"]
-
-    for package in additional_packages:
-        try:
-            install(package)
-        except subprocess.CalledProcessError:
-            print(f"{package} 설치 중 오류가 발생했습니다.")
-            return
 
     print("모든 패키지가 성공적으로 설치되었습니다.")
 
