@@ -1,6 +1,6 @@
 pycaw
 keyboard
-whisper
+openai-whisper
 SpeechRecognition
 PySide6
 pydub
@@ -8,3 +8,18 @@ torch
 selenium
 webdriver_manager
 transformers
+llama-cpp-python
+numpy
+pyaudio
+pvporcupine
+comtypes
+pywin32
+geopy
+requests
+psutil
+py2exe
+setproctitle
+urllib3
+datetime
+python-dotenv
+pyinstaller
