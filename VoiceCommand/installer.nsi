@@ -58,6 +58,7 @@ Section "VoiceCommand" SEC_VOICECOMMAND
   File "Ari.bat"
   File "VoiceCommand.py"
   File "ai_assistant.py"
+  File "requirements.txt"
   File "icon.png"
   File "icon.ico"
   File "config.json"
