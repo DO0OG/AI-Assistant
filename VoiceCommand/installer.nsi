@@ -36,15 +36,12 @@ SectionEnd
 Section "Install Dependencies" SEC_DEPENDENCIES
   SetOutPath $INSTDIR
   File "install_dependencies.py"
+  File "requirements.txt"
+
   MessageBox MB_OK "필요한 패키지들을 설치합니다. 이 과정은 몇 분 정도 소요될 수 있습니다."
 
-  ; install_dependencies.py 실행 (입력 대기 없이)
-  FileOpen $0 "$TEMP\run_install_dependencies.bat" w
-  FileWrite $0 '@echo off$\r$\n'
-  FileWrite $0 '"$LOCALAPPDATA\Programs\Python\Python311\python.exe" "$INSTDIR\install_dependencies.py"'
-  FileClose $0
-  nsExec::ExecToLog '"$TEMP\run_install_dependencies.bat"'
-  Delete "$TEMP\run_install_dependencies.bat"
+  ; install_dependencies.py 실행
+  nsExec::ExecToLog '"$LOCALAPPDATA\Programs\Python\Python311\python.exe" "$INSTDIR\install_dependencies.py"'
 
   Pop $0
   ${If} $0 != 0
@@ -58,7 +55,6 @@ Section "VoiceCommand" SEC_VOICECOMMAND
   File "Ari.bat"
   File "VoiceCommand.py"
   File "ai_assistant.py"
-  File "requirements.txt"
   File "icon.png"
   File "icon.ico"
   File "config.json"

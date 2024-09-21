@@ -60,11 +60,14 @@ from PySide6.QtCore import (
     Q_ARG,
     QRect,
     Slot,
+    QBuffer
 )
 from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
+from collections import OrderedDict
+
 
 # 전역 변수 선언
 tts_model = None
@@ -116,6 +119,43 @@ interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
 volume = cast(interface, POINTER(IAudioEndpointVolume))
 
 
+# LRU 캐시 구현
+class LRUCache:
+    def __init__(self, capacity=10):
+        self.cache = OrderedDict()
+        self.capacity = capacity
+
+    def get(self, key):
+        if key not in self.cache:
+            return None
+        self.cache.move_to_end(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        elif len(self.cache) >= self.capacity:
+            self.cache.popitem(last=False)
+        self.cache[key] = value
+
+
+# 이미지 로딩 및 캐싱 함수
+def load_and_cache_image(path, cache):
+    cached_image = cache.get(path)
+    if cached_image is not None:
+        return cached_image
+
+    image = QImage(path)
+    scaled_image = image.scaled(
+        image.width() * 1.5,
+        image.height() * 1.5,
+        Qt.KeepAspectRatio,
+        Qt.SmoothTransformation,
+    )
+    cache.put(path, scaled_image)
+    return scaled_image
+
+
 # 로그 설정
 def setup_logging():
     log_dir = "logs"
@@ -135,16 +175,17 @@ def setup_logging():
     )
 
 
-# 자원 모니터링 스레드
+# 리소스 모니터링 스레드
 class ResourceMonitor(QThread):
     gc_needed = Signal()
 
-    def __init__(self, memory_threshold=80, cpu_threshold=70, check_interval=5):
+    def __init__(
+        self, memory_threshold=20, cpu_threshold=30, check_interval=5
+    ):
         super().__init__()
         self.memory_threshold = memory_threshold
         self.cpu_threshold = cpu_threshold
         self.check_interval = check_interval
-        self.running = True
 
     def run(self):
         while self.running:
@@ -170,12 +211,7 @@ def perform_gc():
     logging.info("가비지 컬렉션 완료")
 
 
-def perform_gc():
-    logging.info("가비지 컬렉션 실행 중...")
-    gc.collect()
-    logging.info("가비지 컬렉션 완료")
-
-
+# 모델 로딩 스레드
 class ModelLoadingThread(QThread):
     finished = Signal()
     progress = Signal(str)
@@ -554,8 +590,8 @@ class CharacterWidget(QWidget):
     exit_signal = Signal()
     set_listening_state_signal = Signal(bool)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.is_listening = False
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -586,7 +622,7 @@ class CharacterWidget(QWidget):
         self.action_duration_timer = QTimer(self)
         self.action_duration_timer.timeout.connect(self.end_current_action)
 
-        self.image_cache = {}
+        self.image_cache = LRUCache(20)
         self.load_images()
         self.start_auto_move()
 
@@ -607,41 +643,61 @@ class CharacterWidget(QWidget):
         image_folder = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "images"
         )
-        self.idle_image = self.load_and_cache_image(
-            os.path.join(image_folder, "idle.png")
-        )
-        self.move_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"move{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.drag_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.listen_image = self.load_and_cache_image(
-            os.path.join(image_folder, "listen.png")
-        )
-        self.sit_image = self.load_and_cache_image(
-            os.path.join(image_folder, "sit.png")
-        )
-        self.fall_images = [
-            self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
-            for i in range(1, 4)
-        ]
-        self.current_image = self.idle_image
+        self.image_cache = LRUCache(50)  # 캐시 크기 제한
+        self.image_sets = {
+            "idle": [
+                load_and_cache_image(
+                    os.path.join(image_folder, f"idle{i}.png"), self.image_cache
+                )
+                for i in range(1, 9)
+            ],
+            "walk": [
+                load_and_cache_image(
+                    os.path.join(image_folder, f"walk{i}.png"), self.image_cache
+                )
+                for i in range(1, 10)
+            ],
+            "sit": [
+                load_and_cache_image(
+                    os.path.join(image_folder, f"sit{i}.png"), self.image_cache
+                )
+                for i in range(1, 10)
+            ],
+        }
+        self.current_image = self.image_sets["idle"][0]
         self.resize(QPixmap.fromImage(self.current_image).size())
 
     def load_and_cache_image(self, path):
-        if path not in self.image_cache:
-            image = QImage(path)
-            scaled_image = image.scaled(
-                image.width() * 2,
-                image.height() * 2,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.image_cache[path] = scaled_image
-        return self.image_cache[path]
+        cached_image = self.image_cache.get(path)
+        if cached_image is not None:
+            return cached_image
+
+        image = QImage(path)
+        scaled_image = image.scaled(
+            image.width() * 1.5,
+            image.height() * 1.5,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+
+        # 이미지 압축
+        buffer = QBuffer()
+        buffer.open(QBuffer.WriteOnly)
+        scaled_image.save(buffer, "PNG", quality=70)  # 압축률 조정 (0-100)
+        compressed_image = QImage()
+        compressed_image.loadFromData(buffer.data(), "PNG")
+
+        self.image_cache.put(path, compressed_image)
+        return compressed_image
+
+    def get_image_set(self, action):
+        if action not in self.image_sets:
+            image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+            if action == 'drag':
+                self.image_sets[action] = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)]
+            elif action == 'fall':
+                self.image_sets[action] = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+        return self.image_sets[action]
 
     def start_auto_move(self):
         if not self.is_listening:
@@ -1760,8 +1816,8 @@ class MainWindow(QMainWindow):
         self.resource_monitor.stop()
         self.resource_monitor.wait()
         self.voice_thread.stop()
-        self.tts_thread.queue.put(None)  # None을 큐에 추가
-        self.command_thread.queue.put(None)  # None을 큐에 추가
+        self.tts_thread.queue.put(None)
+        self.command_thread.queue.put(None)
         self.voice_thread.wait()
         self.tts_thread.wait()
         self.command_thread.wait()
@@ -1799,7 +1855,10 @@ def main():
     try:
         setup_logging()
         logging.info("프로그램 시작")
+
         app = QApplication(sys.argv)
+        main_window = MainWindow()
+        main_window.show()
 
         if not QSystemTrayIcon.isSystemTrayAvailable():
             logging.error("시스템 트레이를 사용할 수 없습니다.")
@@ -1811,9 +1870,6 @@ def main():
         if not os.path.exists(icon_path):
             logging.warning("아이콘 파일이 없습니다. 기본 아이콘을 사용합니다.")
             icon_path = None
-
-        main_window = MainWindow()
-        main_window.show()
 
         tray_icon = main_window.tray_icon
         tts_thread = main_window.tts_thread
@@ -1839,7 +1895,7 @@ def main():
         app.aboutToQuit.connect(lambda: main_window.command_thread.queue.put(None))
         app.aboutToQuit.connect(main_window.tts_thread.wait)
         app.aboutToQuit.connect(main_window.command_thread.wait)
-        app.aboutToQuit.connect(tray_icon.exit)
+        app.aboutToQuit.connect(main_window.tray_icon.exit)
         app.aboutToQuit.connect(main_window.resource_monitor.stop)
         app.aboutToQuit.connect(main_window.resource_monitor.wait)
 
