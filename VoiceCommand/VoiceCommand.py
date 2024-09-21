@@ -46,7 +46,17 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from PySide6.QtGui import QIcon, QAction, QPainter, QPixmap, QImage, QFont, QFontDatabase, QColor, QFontMetrics
+from PySide6.QtGui import (
+    QIcon,
+    QAction,
+    QPainter,
+    QPixmap,
+    QImage,
+    QFont,
+    QFontDatabase,
+    QColor,
+    QFontMetrics,
+)
 from PySide6.QtCore import (
     QThread,
     Signal,
@@ -60,7 +70,7 @@ from PySide6.QtCore import (
     Q_ARG,
     QRect,
     Slot,
-    QBuffer
+    QBuffer,
 )
 from melo.api import TTS
 from pydub import AudioSegment
@@ -179,9 +189,7 @@ def setup_logging():
 class ResourceMonitor(QThread):
     gc_needed = Signal()
 
-    def __init__(
-        self, memory_threshold=20, cpu_threshold=30, check_interval=5
-    ):
+    def __init__(self, memory_threshold=20, cpu_threshold=30, check_interval=5):
         super().__init__()
         self.memory_threshold = memory_threshold
         self.cpu_threshold = cpu_threshold
@@ -246,16 +254,25 @@ def text_to_speech(text):
 
         # TTS 재생 전에 음성 인식을 비활성화
         app = QApplication.instance()
-        main_window = next((w for w in app.topLevelWidgets() if isinstance(w, MainWindow)), None)
-        if main_window and hasattr(main_window, "voice_thread") and main_window.voice_thread:
+        main_window = next(
+            (w for w in app.topLevelWidgets() if isinstance(w, MainWindow)), None
+        )
+        if (
+            main_window
+            and hasattr(main_window, "voice_thread")
+            and main_window.voice_thread
+        ):
             main_window.voice_thread.is_tts_playing = True
 
         # 말풍선 표시
         if main_window and hasattr(main_window, "tray_icon"):
             for character in main_window.tray_icon.character_widgets:
-                QMetaObject.invokeMethod(character, "show_speech_bubble", 
-                                         Qt.QueuedConnection, 
-                                         Q_ARG(str, text))
+                QMetaObject.invokeMethod(
+                    character,
+                    "show_speech_bubble",
+                    Qt.QueuedConnection,
+                    Q_ARG(str, text),
+                )
 
         # pydub를 사용하여 오디오 재생
         sound = AudioSegment.from_file(output_path)
@@ -263,14 +280,18 @@ def text_to_speech(text):
         os.remove(output_path)  # 오디오 파일 삭제
 
         # TTS 재생 후에 음성 인식을 다시 활성화
-        if main_window and hasattr(main_window, "voice_thread") and main_window.voice_thread:
+        if (
+            main_window
+            and hasattr(main_window, "voice_thread")
+            and main_window.voice_thread
+        ):
             main_window.voice_thread.is_tts_playing = False
 
         # 말풍선 숨기기
         if main_window and hasattr(main_window, "tray_icon"):
             for character in main_window.tray_icon.character_widgets:
                 character.hide_speech_bubble()
-                
+
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
@@ -417,32 +438,34 @@ def get_weather_info(lat, lon):
 
         data = response.json()
 
-        if data['response']['header']['resultCode'] == '00':
-            items = data['response']['body']['items']['item']
-            
+        if data["response"]["header"]["resultCode"] == "00":
+            items = data["response"]["body"]["items"]["item"]
+
             weather_info = {}
             for item in items:
-                category = item['category']
-                value = item['obsrValue']
+                category = item["category"]
+                value = item["obsrValue"]
                 weather_info[category] = value
-            
-            temp = float(weather_info.get('T1H', 'N/A'))
-            humidity = int(weather_info.get('REH', 'N/A'))
-            rain = float(weather_info.get('RN1', '0'))
-            
+
+            temp = float(weather_info.get("T1H", "N/A"))
+            humidity = int(weather_info.get("REH", "N/A"))
+            rain = float(weather_info.get("RN1", "0"))
+
             weather_status = "맑음"
             if rain > 0:
                 weather_status = "비"
-            elif int(weather_info.get('PTY', '0')) > 0:
+            elif int(weather_info.get("PTY", "0")) > 0:
                 weather_status = "눈 또는 비"
-            
+
             # 소수점을 "점"으로 바꾸고, 숫자를 읽기 쉽게 조정
             temp_str = f"{int(temp)}점 {int((temp % 1) * 10)}"
             rain_str = f"{int(rain)}점 {int((rain % 1) * 10)}"
 
-            return (f"현재 날씨는 {weather_status}입니다. "
-                    f"기온은 {temp_str}도, 습도는 {humidity}퍼센트, "
-                    f"강수량은 {rain_str}밀리미터입니다.")
+            return (
+                f"현재 날씨는 {weather_status}입니다. "
+                f"기온은 {temp_str}도, 습도는 {humidity}퍼센트, "
+                f"강수량은 {rain_str}밀리미터입니다."
+            )
         else:
             logging.error(f"API 오류: {data['response']['header']['resultMsg']}")
             return "날씨 정보를 가져오는 데 실패했습니다."
@@ -692,11 +715,23 @@ class CharacterWidget(QWidget):
 
     def get_image_set(self, action):
         if action not in self.image_sets:
-            image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-            if action == 'drag':
-                self.image_sets[action] = [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)]
-            elif action == 'fall':
-                self.image_sets[action] = [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+            image_folder = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "images"
+            )
+            if action == "drag":
+                self.image_sets[action] = [
+                    self.load_and_cache_image(
+                        os.path.join(image_folder, f"drag{i}.png")
+                    )
+                    for i in range(1, 9)
+                ]
+            elif action == "fall":
+                self.image_sets[action] = [
+                    self.load_and_cache_image(
+                        os.path.join(image_folder, f"fall{i}.png")
+                    )
+                    for i in range(1, 9)
+                ]
         return self.image_sets[action]
 
     def start_auto_move(self):
@@ -1146,6 +1181,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         for character in self.character_widgets:
             character.start_random_move()
 
+
 class VoiceRecognitionThread(QThread):
     result = Signal(str)
     listening_state_changed = Signal(bool)
@@ -1158,7 +1194,9 @@ class VoiceRecognitionThread(QThread):
         self.audio_stream = None
         self.selected_microphone = selected_microphone
         self.microphone_index = None
-        self.access_key = config["picovoice_access_key"]  # Picovoice 콘솔에서 받은 액세스 키
+        self.access_key = config[
+            "picovoice_access_key"
+        ]  # Picovoice 콘솔에서 받은 액세스 키
         # 현재 스크립트 파일의 디렉토리 경로를 가져옵니다
         current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -1177,7 +1215,7 @@ class VoiceRecognitionThread(QThread):
         try:
             self.init_porcupine()
             self.init_audio()
-            
+
             while self.running:
                 pcm = self.audio_stream.read(self.porcupine.frame_length)
                 pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
@@ -1318,7 +1356,9 @@ class CharacterWidget(QWidget):
         if font_id != -1:
             self.font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
         else:
-            logging.warning("DNFBitBitv2.ttf 폰트를 로드할 수 없습니다. 기본 폰트를 사용합니다.")
+            logging.warning(
+                "DNFBitBitv2.ttf 폰트를 로드할 수 없습니다. 기본 폰트를 사용합니다."
+            )
             self.font_family = QFont().family()
 
         self.initUI()
@@ -1358,23 +1398,45 @@ class CharacterWidget(QWidget):
         sit_action = self.context_menu.addAction("앉기")
         sit_action.triggered.connect(self.sit)
         idle_action = self.context_menu.addAction("기본 상태")
-        idle_action.triggered.connect(self.return_to_idle)  # idle() 대신 return_to_idle() 사용
+        idle_action.triggered.connect(
+            self.return_to_idle
+        )  # idle() 대신 return_to_idle() 사용
         fall_action = self.context_menu.addAction("떨어지기")
         fall_action.triggered.connect(self.start_fall)
         exit_action = self.context_menu.addAction("제거")
         exit_action.triggered.connect(self.close)
 
     def load_images(self):
-        image_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+        image_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "images"
+        )
         self.image_sets = {
-            'idle': [self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png")) for i in range(1, 9)],
-            'walk': [self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png")) for i in range(1, 10)],
-            'drag': [self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png")) for i in range(1, 9)],
-            'listen': [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)],
-            'sit': [self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png")) for i in range(1, 10)],
-            'fall': [self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png")) for i in range(1, 9)]
+            "idle": [
+                self.load_and_cache_image(os.path.join(image_folder, f"idle{i}.png"))
+                for i in range(1, 9)
+            ],
+            "walk": [
+                self.load_and_cache_image(os.path.join(image_folder, f"walk{i}.png"))
+                for i in range(1, 10)
+            ],
+            "drag": [
+                self.load_and_cache_image(os.path.join(image_folder, f"drag{i}.png"))
+                for i in range(1, 9)
+            ],
+            "listen": [
+                self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
+                for i in range(1, 10)
+            ],
+            "sit": [
+                self.load_and_cache_image(os.path.join(image_folder, f"sit{i}.png"))
+                for i in range(1, 10)
+            ],
+            "fall": [
+                self.load_and_cache_image(os.path.join(image_folder, f"fall{i}.png"))
+                for i in range(1, 9)
+            ],
         }
-        self.current_image = self.image_sets['idle'][0]
+        self.current_image = self.image_sets["idle"][0]
         self.resize(QPixmap.fromImage(self.current_image).size())
 
     def load_and_cache_image(self, path):
@@ -1400,11 +1462,24 @@ class CharacterWidget(QWidget):
         self.is_moving = False
 
     def start_random_move(self):
-        if not self.is_dragging and not self.is_listening and self.current_action != "sit" and not self.falling:
+        if (
+            not self.is_dragging
+            and not self.is_listening
+            and self.current_action != "sit"
+            and not self.falling
+        ):
             self.animate()
 
     def animate(self):
-        if (self.animation is None or self.animation.state() == QPropertyAnimation.Stopped) and not self.is_listening and self.current_action != "sit" and not self.falling:
+        if (
+            (
+                self.animation is None
+                or self.animation.state() == QPropertyAnimation.Stopped
+            )
+            and not self.is_listening
+            and self.current_action != "sit"
+            and not self.falling
+        ):
             self.animation = QPropertyAnimation(self, b"pos")
             self.animation.setDuration(3000)
             start_pos = self.pos()
@@ -1441,11 +1516,23 @@ class CharacterWidget(QWidget):
         self.update()
 
     def update_animation(self):
-        action = 'fall' if self.falling else (
-            'drag' if self.is_dragging else (
-            'walk' if self.is_moving and not self.is_listening else (
-            'sit' if self.current_action == "sit" or self.is_listening else 'idle'
-        )))
+        action = (
+            "fall"
+            if self.falling
+            else (
+                "drag"
+                if self.is_dragging
+                else (
+                    "walk"
+                    if self.is_moving and not self.is_listening
+                    else (
+                        "sit"
+                        if self.current_action == "sit" or self.is_listening
+                        else "idle"
+                    )
+                )
+            )
+        )
         self.current_frame = (self.current_frame + 1) % len(self.image_sets[action])
         self.current_image = self.image_sets[action][self.current_frame]
         self.update()
@@ -1470,7 +1557,7 @@ class CharacterWidget(QWidget):
             self.stop_auto_move()
             if self.current_action == "sit":
                 self.return_to_idle()  # 앉아있는 상태에서 드래그 시 idle 상태로 변경
-            self.current_image = self.image_sets['drag'][0]
+            self.current_image = self.image_sets["drag"][0]
             self.update()
         elif event.button() == Qt.RightButton:
             self.show_context_menu(event.pos())
@@ -1508,7 +1595,7 @@ class CharacterWidget(QWidget):
     def sit(self):
         self.stop_auto_move()
         self.current_action = "sit"
-        self.current_image = self.image_sets['sit'][0]
+        self.current_image = self.image_sets["sit"][0]
         self.update()
         self.action_timer.stop()  # 앉아있는 동안 자동 행동 타이머 중지
 
@@ -1518,7 +1605,7 @@ class CharacterWidget(QWidget):
 
     def return_to_idle(self):
         self.current_action = "idle"
-        self.current_image = self.image_sets['idle'][0]
+        self.current_image = self.image_sets["idle"][0]
         self.update()
         self.action_timer.start(random.randint(15000, 45000))  # 자동 행동 타이머 재시작
 
@@ -1526,13 +1613,13 @@ class CharacterWidget(QWidget):
         self.is_listening = is_listening
         if is_listening:
             self.current_action = "sit"
-            self.current_image = self.image_sets['sit'][0]
+            self.current_image = self.image_sets["sit"][0]
             self.stop_auto_move()
             self.action_timer.stop()
             self.action_duration_timer.stop()
         else:
             self.current_action = "idle"
-            self.current_image = self.image_sets['idle'][0]
+            self.current_image = self.image_sets["idle"][0]
             self.start_auto_move()
             self.action_timer.start(random.randint(15000, 45000))
         self.update()
@@ -1541,7 +1628,12 @@ class CharacterWidget(QWidget):
         self.set_listening_state_signal.emit(is_listening)
 
     def perform_random_action(self):
-        if not self.is_listening and not self.is_dragging and self.current_action != "sit" and not self.falling:
+        if (
+            not self.is_listening
+            and not self.is_dragging
+            and self.current_action != "sit"
+            and not self.falling
+        ):
             action = random.choice(["idle", "walk", "sit"])
             if action == "walk":
                 self.start_random_move()
@@ -1590,7 +1682,12 @@ class CharacterWidget(QWidget):
                 self.move_towards(target.pos())
 
     def move_towards(self, target_pos):
-        if self.falling or self.is_dragging or self.is_listening or self.current_action == "sit":
+        if (
+            self.falling
+            or self.is_dragging
+            or self.is_listening
+            or self.current_action == "sit"
+        ):
             return
 
         current_pos = self.pos()
@@ -1769,9 +1866,7 @@ class MainWindow(QMainWindow):
         self.command_thread = CommandExecutionThread()
 
         self.voice_thread.result.connect(self.handle_voice_result)
-        self.voice_thread.listening_state_changed.connect(
-            self.update_listening_state
-        )
+        self.voice_thread.listening_state_changed.connect(self.update_listening_state)
 
         self.voice_thread.start()
         self.tts_thread.start()
