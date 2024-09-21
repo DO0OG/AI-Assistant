@@ -62,7 +62,7 @@ Section "VoiceCommand" SEC_VOICECOMMAND
   File "아리야아_ko_windows_v3_0_0.ppn"
   File "porcupine_params_ko.pv"
   File /r "images"
-  File /r "models"
+  CreateDirectory "$INSTDIR\models"
 
   CreateShortCut "$DESKTOP\Ari.lnk" "$INSTDIR\Ari.exe" "" "$INSTDIR\icon.ico"
   CreateDirectory "$SMPROGRAMS\VoiceCommand"
