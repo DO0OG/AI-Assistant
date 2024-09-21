@@ -78,8 +78,10 @@
 
 ## 의존성
 - Python 3.11+
+- [whisper](https://github.com/openai/whisper)
+- [MeloTTS](https://github.com/myshell-ai/MeloTTS)
+- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
 - PySide6
-- whisper
 - torch
 - pvporcupine
 - pyaudio
@@ -89,7 +91,6 @@
 - webdriver_manager
 - selenium
 - psutil
-- melo
 - comtypes (Windows 전용)
 - pycaw (Windows 전용)
 - etc...
