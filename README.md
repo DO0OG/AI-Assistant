@@ -95,11 +95,12 @@
 - etc...
 
 ## 라이선스
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+- 이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
 
 ## 기여하기
-버그 리포트, 기능 제안, 풀 리퀘스트 등 모든 형태의 기여를 환영합니다. 기여하기 전에 [CONTRIBUTING.md](CONTRIBUTING.md)를 읽어주세요.
+- 버그 리포트, 기능 제안, 풀 리퀘스트 등 모든 형태의 기여를 환영합니다. 기여하기 전에 [CONTRIBUTING.md](CONTRIBUTING.md)를 읽어주세요.
 
 ## 연락처
-프로젝트에 대한 질문이나 제안이 있으시면 [이슈](https://github.com/your-username/ari-voice-command/issues)를 열어주세요.
+- 프로젝트에 대한 질문이나 제안이 있으시면 [이슈](https://github.com/your-username/ari-voice-command/issues)를 열어주세요.
+- 또는 이메일 mad_doggo@dogdev.buzz로 연락주세요.
 
