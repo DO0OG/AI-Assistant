@@ -189,11 +189,12 @@ def setup_logging():
 class ResourceMonitor(QThread):
     gc_needed = Signal()
 
-    def __init__(self, memory_threshold=20, cpu_threshold=30, check_interval=5):
+    def __init__(self, memory_threshold=30, cpu_threshold=30, check_interval=5):
         super().__init__()
         self.memory_threshold = memory_threshold
         self.cpu_threshold = cpu_threshold
         self.check_interval = check_interval
+        self.running = True
 
     def run(self):
         while self.running:
@@ -210,6 +211,7 @@ class ResourceMonitor(QThread):
 
     def stop(self):
         self.running = False
+        self.wait()  # 스레드가 완전히 종료될 때까지 대기
 
 
 # 가비지 컬렉션 실행
@@ -966,7 +968,6 @@ class CharacterWidget(QWidget):
             self.current_frame = (self.current_frame + 1) % len(self.move_images)
             self.update()
 
-
 class VoiceCommandThread(QThread):
     command_signal = Signal(str)
     finished = Signal()
@@ -980,7 +981,6 @@ class VoiceCommandThread(QThread):
         self.is_listening = False
         self.is_processing = False
         self.is_tts_playing = False
-        self.falling = False
 
     def run(self):
         global whisper_model
@@ -1194,22 +1194,14 @@ class VoiceRecognitionThread(QThread):
         self.audio_stream = None
         self.selected_microphone = selected_microphone
         self.microphone_index = None
-        self.access_key = config[
-            "picovoice_access_key"
-        ]  # Picovoice 콘솔에서 받은 액세스 키
-        # 현재 스크립트 파일의 디렉토리 경로를 가져옵니다
+        self.access_key = config["picovoice_access_key"]
         current_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # 키워드 파일 경로를 현재 디렉토리 기준으로 설정합니다
         self.keyword_path = os.path.join(current_dir, "아리야아_ko_windows_v3_0_0.ppn")
         self.model_path = os.path.join(current_dir, "porcupine_params_ko.pv")
 
-        # 키워드 파일이 존재하는지 확인합니다
         if not os.path.exists(self.keyword_path):
             logging.error(f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}")
-            raise FileNotFoundError(
-                f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}"
-            )
+            raise FileNotFoundError(f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}")
 
     def run(self):
         try:
@@ -1280,7 +1272,6 @@ class VoiceRecognitionThread(QThread):
         if self.selected_microphone:
             self.microphone_index = self.get_device_index(self.selected_microphone)
         else:
-            # 기본 마이크 사용
             self.microphone_index = None
         logging.info(f"선택된 마이크 인덱스: {self.microphone_index}")
 
@@ -1288,9 +1279,7 @@ class VoiceRecognitionThread(QThread):
         for index, name in enumerate(sr.Microphone.list_microphone_names()):
             if device_name in name:
                 return index
-        logging.warning(
-            f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다."
-        )
+        logging.warning(f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다.")
         return None
 
     def recognize_speech(self):
@@ -1312,6 +1301,7 @@ class VoiceRecognitionThread(QThread):
 
     def stop(self):
         self.running = False
+        self.wait()  # 스레드가 완전히 종료될 때까지 대기
 
     def set_microphone(self, microphone_name):
         self.selected_microphone = microphone_name
