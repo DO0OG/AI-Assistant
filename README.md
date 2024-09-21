@@ -70,9 +70,9 @@
      
 }
 ```
-`config.json` 파일은 보안상의 이유로 Git 저장소에 포함되지 않습니다.
+- `config.json` 파일은 보안상의 이유로 Git 저장소에 포함되지 않습니다.
 
 ### AI 모델
 - 기본적으로 AI 모델은 프로그램에 포함되지 않습니다.
-- 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 models 폴더에 넣어 사용해야 합니다.
+- 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
 
