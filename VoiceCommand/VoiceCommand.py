@@ -569,11 +569,11 @@ def execute_command(command):
         response = f"현재 시간은 {current_time}입니다."
         text_to_speech(response)
         logging.info(f"현재 시간 안내: {response}")
+    elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
+        set_shutdown_timer_from_command(command)
     elif "전원 꺼 줘" in command or "컴퓨터 꺼 줘" in command:
         text_to_speech("컴퓨터를 종료합니다.")
         shutdown_computer()
-    elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
-        set_shutdown_timer_from_command(command)
     elif "날씨 어때" in command:
         try:
             lat, lon = get_current_location()
