@@ -1938,14 +1938,6 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
-        self.resource_monitor.stop()
-        self.resource_monitor.wait()
-        self.voice_thread.stop()
-        self.tts_thread.queue.put(None)
-        self.command_thread.queue.put(None)
-        self.voice_thread.wait()
-        self.tts_thread.wait()
-        self.command_thread.wait()
         event.ignore()
         self.hide()
 
@@ -1960,7 +1952,6 @@ class MainWindow(QMainWindow):
     def show_loading_progress(self, message):
         self.tray_icon.showMessage("Ari", message, QSystemTrayIcon.Information, 2000)
 
-    # 윈도우를 보여주는 메서드 추가
     def show_window(self):
         self.show()
         self.activateWindow()
