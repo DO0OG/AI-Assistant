@@ -229,16 +229,62 @@ class ResourceMonitor(QThread):
         self.wait()
 
 
+def get_memory_info():
+    class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.c_ulong),
+            ("PageFaultCount", ctypes.c_ulong),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+            ("PrivateUsage", ctypes.c_size_t),
+        ]
+
+    GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
+    GetProcessMemoryInfo.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+        ctypes.wintypes.DWORD,
+    ]
+    GetProcessMemoryInfo.restype = ctypes.wintypes.BOOL
+
+    counters = PROCESS_MEMORY_COUNTERS_EX()
+    counters.cb = ctypes.sizeof(counters)
+    if not GetProcessMemoryInfo(
+        ctypes.windll.kernel32.GetCurrentProcess(),
+        ctypes.byref(counters),
+        ctypes.sizeof(counters),
+    ):
+        raise ctypes.WinError()
+
+    return counters
+
+
 # 가비지 컬렉션 실행
 def perform_gc():
     logging.info("가비지 컬렉션 실행 중...")
     gc.collect()
+
     process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    memory_usage_mb = memory_info.rss / (1024 * 1024)
+    psutil_memory = process.memory_info()
+
+    windows_memory = get_memory_info()
+
+    logging.info(f"가비지 컬렉션 완료. 메모리 사용량:")
     logging.info(
-        f"가비지 컬렉션 완료. 현재 프로그램 메모리 사용량: {memory_usage_mb:.2f} MB"
+        f"  Windows API (Working Set): {windows_memory.WorkingSetSize / (1024 * 1024):.2f} MB"
     )
+    logging.info(
+        f"  Windows API (Private Usage): {windows_memory.PrivateUsage / (1024 * 1024):.2f} MB"
+    )
+    logging.info(f"  psutil (RSS): {psutil_memory.rss / (1024 * 1024):.2f} MB")
+    logging.info(f"  psutil (VMS): {psutil_memory.vms / (1024 * 1024):.2f} MB")
+    logging.info(f"  psutil (Working Set): {psutil_memory.wset / (1024 * 1024):.2f} MB")
 
 
 # 모델 로딩 스레드
@@ -1902,6 +1948,11 @@ class MainWindow(QMainWindow):
         self.tts_thread.start()
         self.command_thread.start()
 
+        # GC 타이머 추가
+        self.gc_timer = QTimer(self)
+        self.gc_timer.timeout.connect(self.periodic_gc)
+        self.gc_timer.start(5 * 60 * 1000)  # 5분마다 실행 (밀리초 단위)
+
     def initUI(self):
         self.microphone_label = QLabel("마이크 선택:", self)
         self.microphone_label.setGeometry(20, 50, 80, 30)
@@ -1963,6 +2014,10 @@ class MainWindow(QMainWindow):
     def update_listening_state(self, is_listening):
         for character in self.tray_icon.character_widgets:
             character.set_listening_state(is_listening)
+
+    def periodic_gc(self):
+        logging.info("주기적 가비지 컬렉션 실행")
+        perform_gc()
 
 
 def main():
