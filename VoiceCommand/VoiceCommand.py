@@ -129,6 +129,10 @@ interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
 volume = cast(interface, POINTER(IAudioEndpointVolume))
 
 
+# 전역 변수로 LRU 캐시 크기 설정
+IMAGE_CACHE_SIZE = 20
+
+
 # LRU 캐시 구현
 class LRUCache:
     def __init__(self, capacity=10):
@@ -162,8 +166,16 @@ def load_and_cache_image(path, cache):
         Qt.KeepAspectRatio,
         Qt.SmoothTransformation,
     )
-    cache.put(path, scaled_image)
-    return scaled_image
+
+    # 이미지 압축
+    buffer = QBuffer()
+    buffer.open(QBuffer.WriteOnly)
+    scaled_image.save(buffer, "PNG", quality=70)  # 압축률 조정 (0-100)
+    compressed_image = QImage()
+    compressed_image.loadFromData(buffer.data(), "PNG")
+
+    cache.put(path, compressed_image)
+    return compressed_image
 
 
 # 로그 설정
@@ -189,20 +201,23 @@ def setup_logging():
 class ResourceMonitor(QThread):
     gc_needed = Signal()
 
-    def __init__(self, memory_threshold=30, cpu_threshold=30, check_interval=5):
+    def __init__(self, memory_threshold=2500, cpu_threshold=50, check_interval=5):
         super().__init__()
         self.memory_threshold = memory_threshold
         self.cpu_threshold = cpu_threshold
         self.check_interval = check_interval
         self.running = True
+        self.process = psutil.Process(os.getpid())
 
     def run(self):
         while self.running:
-            memory_percent = psutil.virtual_memory().percent
-            cpu_percent = psutil.cpu_percent(interval=1)
+            memory_info = self.process.memory_info()
+            cpu_percent = self.process.cpu_percent(interval=1)
+
+            memory_usage_mb = memory_info.rss / (1024 * 1024)  # RSS를 MB로 변환
 
             if (
-                memory_percent > self.memory_threshold
+                memory_usage_mb > self.memory_threshold
                 or cpu_percent > self.cpu_threshold
             ):
                 self.gc_needed.emit()
@@ -211,14 +226,19 @@ class ResourceMonitor(QThread):
 
     def stop(self):
         self.running = False
-        self.wait()  # 스레드가 완전히 종료될 때까지 대기
+        self.wait()
 
 
 # 가비지 컬렉션 실행
 def perform_gc():
     logging.info("가비지 컬렉션 실행 중...")
     gc.collect()
-    logging.info("가비지 컬렉션 완료")
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    memory_usage_mb = memory_info.rss / (1024 * 1024)
+    logging.info(
+        f"가비지 컬렉션 완료. 현재 프로그램 메모리 사용량: {memory_usage_mb:.2f} MB"
+    )
 
 
 # 모델 로딩 스레드
@@ -227,21 +247,42 @@ class ModelLoadingThread(QThread):
     progress = Signal(str)
 
     def run(self):
-        global tts_model, speaker_ids, whisper_model
+        global tts_model, speaker_ids
         try:
             self.progress.emit("TTS 모델 로딩 중...")
             with torch.no_grad():
                 tts_model = TTS(language="KR", device=device)
                 speaker_ids = tts_model.hps.data.spk2id
 
-            self.progress.emit("Whisper 모델 로딩 중...")
-            whisper_model = whisper.load_model("medium", device=device)
-
-            logging.info("TTS 및 Whisper 모델 로딩 완료. " + device)
+            logging.info("TTS 모델 로딩 완료. " + device)
         except Exception as e:
             logging.error(f"모델 로딩 중 오류 발생: {str(e)}")
         finally:
             self.finished.emit()
+
+
+class WhisperModelManager:
+    def __init__(self):
+        pass
+
+    def load_model(self):
+        logging.info("Whisper 모델 로딩 중...")
+        model = whisper.load_model("small", device=device)
+        logging.info("Whisper 모델 로딩 완료.")
+        return model
+
+    def unload_model(self, model):
+        del model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logging.info("Whisper 모델 언로드 완료.")
+
+    def transcribe(self, audio_file):
+        model = self.load_model()
+        result = model.transcribe(audio_file, language="ko", fp16=False)
+        self.unload_model(model)
+        return result["text"].strip().lower()
 
 
 def text_to_speech(text):
@@ -968,6 +1009,7 @@ class CharacterWidget(QWidget):
             self.current_frame = (self.current_frame + 1) % len(self.move_images)
             self.update()
 
+
 class VoiceCommandThread(QThread):
     command_signal = Signal(str)
     finished = Signal()
@@ -977,13 +1019,13 @@ class VoiceCommandThread(QThread):
     def __init__(self):
         super().__init__()
         self.recognizer = sr.Recognizer()
+        self.whisper_manager = WhisperModelManager()
         self.is_running = True
         self.is_listening = False
         self.is_processing = False
         self.is_tts_playing = False
 
     def run(self):
-        global whisper_model
         while self.is_running:
             if self.is_listening and not self.is_processing and not self.is_tts_playing:
                 try:
@@ -997,10 +1039,7 @@ class VoiceCommandThread(QThread):
                     logging.info("음성 인식 중...")
                     with open("temp_audio.wav", "wb") as f:
                         f.write(audio.get_wav_data())
-                    result = whisper_model.transcribe(
-                        "temp_audio.wav", language="ko", fp16=False
-                    )
-                    command = result["text"].strip().lower()
+                    command = self.whisper_manager.transcribe("temp_audio.wav")
                     logging.info(f"인식된 명령: {command}")
                     if command:
                         self.command_signal.emit(command)
@@ -1014,11 +1053,12 @@ class VoiceCommandThread(QThread):
                     self.is_processing = False
                     if os.path.exists("temp_audio.wav"):
                         os.remove("temp_audio.wav")
+                    self.whisper_manager.unload_model()  # 사용 후 모델 언로드
             time.sleep(0.1)
 
     def stop(self):
         self.is_running = False
-        self.wait()  # 스레드가 완전히 종료될 때까지 대기
+        self.wait()
 
     def toggle_listening(self):
         if self.is_listening:
