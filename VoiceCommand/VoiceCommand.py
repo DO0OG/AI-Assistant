@@ -52,6 +52,11 @@ icon_path = None
 volume = None
 active_timer = None
 
+def set_ai_assistant(assistant):
+    global ai_assistant
+    ai_assistant = assistant
+
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
