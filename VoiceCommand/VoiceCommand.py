@@ -632,6 +632,17 @@ def execute_command(command):
         text_to_speech(response)
 
 
+def get_current_time():
+    now = datetime.now()
+    if now.hour < 12:
+        am_pm = "오전"
+        hour = now.hour
+    else:
+        am_pm = "오후"
+        hour = now.hour - 12 if now.hour > 12 else 12
+    return f"{am_pm} {hour}시 {now.minute}분"
+
+
 def adjust_volume(change):
     current_volume = volume.GetMasterVolumeLevelScalar()
     new_volume = min(1.0, max(0.0, current_volume + change))
