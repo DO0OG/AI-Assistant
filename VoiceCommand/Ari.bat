@@ -37,11 +37,11 @@ setlocal
 REM ë¡œê·¸ ?Œì¼ ê²½ë¡œ ?¤ì •
 set logFile=logfile.log
 
-REM ?„ìž¬ ?´ë”???ˆëŠ” VoiceCommand.py ?¤í–‰
+REM ?„ìž¬ ?”ë ‰?°ë¦¬???ˆëŠ” Main.py ?¤í–‰
 set pythonPath=pythonw
-set scriptPath=VoiceCommand.py
+set scriptPath=Main.py
 
-REM pythonw ?¤í–‰ ë°?ë¡œê·¸ ê¸°ë¡ (ì½˜ì†” ì°??†ì´)
+REM pythonw ?¤í–‰ ë¡œê·¸ (ë°±ê·¸?¼ìš´?œì—??
 start /B %pythonPath% %scriptPath% >> %logFile% 2>&1
 
 endlocal
