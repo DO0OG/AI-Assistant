@@ -76,7 +76,7 @@ from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from ai_assistant import get_ai_assistant
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 
 # 전역 변수 선언
@@ -201,91 +201,48 @@ def setup_logging():
 class ResourceMonitor(QThread):
     gc_needed = Signal()
 
-    def __init__(self, memory_threshold=2500, cpu_threshold=50, check_interval=5):
+    def __init__(self, check_interval=5):
         super().__init__()
-        self.memory_threshold = memory_threshold
-        self.cpu_threshold = cpu_threshold
         self.check_interval = check_interval
         self.running = True
-        self.process = psutil.Process(os.getpid())
+        self.process = psutil.Process()
+        self.memory_history = deque(maxlen=10)  # 최근 10개의 메모리 사용량 기록
+        self.last_gc_time = time.time()
+
+    def get_memory_info(self):
+        try:
+            mem_info = self.process.memory_info()
+            return mem_info.private / (1024 * 1024)  # Private Working Set in MB
+        except:
+            return 0
 
     def run(self):
         while self.running:
-            memory_info = self.process.memory_info()
-            cpu_percent = self.process.cpu_percent(interval=1)
+            current_memory = self.get_memory_info()
+            self.memory_history.append(current_memory)
 
-            memory_usage_mb = memory_info.rss / (1024 * 1024)  # RSS를 MB로 변환
-
-            if (
-                memory_usage_mb > self.memory_threshold
-                or cpu_percent > self.cpu_threshold
-            ):
-                self.gc_needed.emit()
+            if len(self.memory_history) >= 5:  # 최소 5개의 샘플이 있을 때
+                avg_memory = sum(self.memory_history) / len(self.memory_history)
+                if current_memory > avg_memory * 1.5 and time.time() - self.last_gc_time > 60:
+                    # 현재 메모리가 평균의 1.5배 이상이고, 마지막 GC로부터 1분 이상 지났을 때
+                    self.gc_needed.emit()
+                    self.last_gc_time = time.time()
 
             time.sleep(self.check_interval)
 
     def stop(self):
         self.running = False
-        self.wait()
-
-
-def get_memory_info():
-    class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
-        _fields_ = [
-            ("cb", ctypes.c_ulong),
-            ("PageFaultCount", ctypes.c_ulong),
-            ("PeakWorkingSetSize", ctypes.c_size_t),
-            ("WorkingSetSize", ctypes.c_size_t),
-            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-            ("PagefileUsage", ctypes.c_size_t),
-            ("PeakPagefileUsage", ctypes.c_size_t),
-            ("PrivateUsage", ctypes.c_size_t),
-        ]
-
-    GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
-    GetProcessMemoryInfo.argtypes = [
-        ctypes.wintypes.HANDLE,
-        ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
-        ctypes.wintypes.DWORD,
-    ]
-    GetProcessMemoryInfo.restype = ctypes.wintypes.BOOL
-
-    counters = PROCESS_MEMORY_COUNTERS_EX()
-    counters.cb = ctypes.sizeof(counters)
-    if not GetProcessMemoryInfo(
-        ctypes.windll.kernel32.GetCurrentProcess(),
-        ctypes.byref(counters),
-        ctypes.sizeof(counters),
-    ):
-        raise ctypes.WinError()
-
-    return counters
 
 
 # 가비지 컬렉션 실행
 def perform_gc():
     logging.info("가비지 컬렉션 실행 중...")
     gc.collect()
-
-    process = psutil.Process(os.getpid())
-    psutil_memory = process.memory_info()
-
-    windows_memory = get_memory_info()
-
+    process = psutil.Process()
+    mem_info = process.memory_info()
     logging.info(f"가비지 컬렉션 완료. 메모리 사용량:")
-    logging.info(
-        f"  Windows API (Working Set): {windows_memory.WorkingSetSize / (1024 * 1024):.2f} MB"
-    )
-    logging.info(
-        f"  Windows API (Private Usage): {windows_memory.PrivateUsage / (1024 * 1024):.2f} MB"
-    )
-    logging.info(f"  psutil (RSS): {psutil_memory.rss / (1024 * 1024):.2f} MB")
-    logging.info(f"  psutil (VMS): {psutil_memory.vms / (1024 * 1024):.2f} MB")
-    logging.info(f"  psutil (Working Set): {psutil_memory.wset / (1024 * 1024):.2f} MB")
-
+    logging.info(f"  Private Working Set: {mem_info.private / (1024 * 1024):.2f} MB")
+    logging.info(f"  RSS: {mem_info.rss / (1024 * 1024):.2f} MB")
 
 # 모델 로딩 스레드
 class ModelLoadingThread(QThread):
@@ -640,12 +597,12 @@ def execute_command(command):
     elif "볼륨 줄이기" in command or "볼륨 내려" in command:
         adjust_volume(-0.1)
         text_to_speech("볼륨을 낮췄습니다.")
-    elif "음소거" in command:
-        volume.SetMute(1, None)
-        text_to_speech("음소거 되었습니다.")
     elif "음소거 해제" in command:
         volume.SetMute(0, None)
         text_to_speech("음소거가 해제되었습니다.")
+    elif "음소거" in command:
+        volume.SetMute(1, None)
+        text_to_speech("음소거 되었습니다.")
     elif "타이머" in command:
         if "취소" in command or "끄기" in command or "중지" in command:
             cancel_timer()
