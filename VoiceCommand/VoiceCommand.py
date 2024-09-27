@@ -3,8 +3,6 @@ import random
 import webbrowser
 import time
 import logging
-from datetime import datetime
-import threading
 from urllib.parse import quote_plus
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -21,6 +19,7 @@ import pvporcupine
 import pyaudio
 import struct
 import threading
+from datetime import datetime, timedelta
 from queue import Queue
 import time
 import requests
@@ -51,6 +50,7 @@ ai_assistant = None
 icon_path = None
 volume = None
 active_timer = None
+active_shutdown_timer = None
 
 def set_ai_assistant(assistant):
     global ai_assistant
@@ -159,12 +159,16 @@ def shutdown_computer():
 
 
 def cancel_timer():
-    global active_timer
+    global active_timer, active_shutdown_timer
     if active_timer:
-        active_timer.cancel()
+        active_timer['timer'].cancel()
         active_timer = None
         text_to_speech("타이머가 취소되었습니다.")
-    else:
+    if active_shutdown_timer:
+        active_shutdown_timer['timer'].cancel()
+        active_shutdown_timer = None
+        text_to_speech("컴퓨터 종료 타이머가 취소되었습니다.")
+    if not active_timer and not active_shutdown_timer:
         text_to_speech("현재 실행 중인 타이머가 없습니다.")
 
 
@@ -173,25 +177,47 @@ def set_timer(minutes):
 
     def timer_thread():
         global active_timer
-        time.sleep(minutes * 60)
-        if active_timer:  # 타이머가 취소되지 않았다면
+        if active_timer and datetime.now() >= active_timer['end_time']:
             text_to_speech(f"{minutes}분 타이머가 완료되었습니다.")
             active_timer = None
+        elif active_timer:
+            # 1초마다 확인하도록 새로운 타이머 설정
+            threading.Timer(1, timer_thread).start()
 
     if active_timer:
-        active_timer.cancel()
-    active_timer = threading.Timer(minutes * 60, timer_thread)
-    active_timer.start()
+        active_timer['timer'].cancel()
+    
+    end_time = datetime.now() + timedelta(minutes=minutes)
+    active_timer = {
+        'timer': threading.Timer(1, timer_thread),
+        'end_time': end_time
+    }
+    active_timer['timer'].start()
     text_to_speech(f"{minutes}분 타이머를 설정했습니다.")
 
 
 def set_shutdown_timer(minutes):
-    def shutdown_timer_thread():
-        time.sleep(minutes * 60)
-        text_to_speech(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
-        shutdown_computer()
+    global active_shutdown_timer
 
-    threading.Thread(target=shutdown_timer_thread).start()
+    def shutdown_timer_thread():
+        global active_shutdown_timer
+        if active_shutdown_timer and datetime.now() >= active_shutdown_timer['end_time']:
+            text_to_speech(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
+            shutdown_computer()
+            active_shutdown_timer = None
+        elif active_shutdown_timer:
+            # 1초마다 확인하도록 새로운 타이머 설정
+            threading.Timer(1, shutdown_timer_thread).start()
+
+    if active_shutdown_timer:
+        active_shutdown_timer['timer'].cancel()
+    
+    end_time = datetime.now() + timedelta(minutes=minutes)
+    active_shutdown_timer = {
+        'timer': threading.Timer(1, shutdown_timer_thread),
+        'end_time': end_time
+    }
+    active_shutdown_timer['timer'].start()
     text_to_speech(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
 
 
