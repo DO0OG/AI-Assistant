@@ -9,7 +9,7 @@ def install(package):
 
 def create_requirements_file():
     requirements = [
-        "pycaw",
+        "pulsectl",
         "keyboard",
         "openai-whisper",
         "SpeechRecognition",
@@ -23,17 +23,13 @@ def create_requirements_file():
         "numpy",
         "pyaudio",
         "pvporcupine",
-        "comtypes",
-        "pywin32",
         "geopy",
         "requests",
         "psutil",
-        "py2exe",
         "setproctitle",
         "urllib3",
         "datetime",
         "python-dotenv",
-        "pyinstaller",
     ]
 
     with open("requirements.txt", "w") as f:
@@ -59,6 +55,11 @@ def main():
 
     print("모든 패키지가 성공적으로 설치되었습니다.")
 
+    # 시스템 패키지 설치 안내
+    print("\n일부 패키지는 시스템 패키지 관리자를 통해 설치해야 할 수 있습니다.")
+    print("다음 명령어를 실행하여 필요한 시스템 패키지를 설치하세요:")
+    print("sudo apt-get update")
+    print("sudo apt-get install python3-pyaudio portaudio19-dev")
 
 if __name__ == "__main__":
     main()

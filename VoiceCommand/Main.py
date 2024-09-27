@@ -2,18 +2,15 @@ import sys
 import os
 import setproctitle
 import random
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-from ctypes import cast, POINTER
-from comtypes import CLSCTX_ALL
 import time
 import logging
 from datetime import datetime
 import gc
 import psutil
 import speech_recognition as sr
-import ctypes
 import time
 import warnings
+import pulsectl
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -50,20 +47,13 @@ speaker_ids = None
 whisper_model = None
 ai_assistant = None
 icon_path = None
-volume = None
+pulse = None
 active_timer = None
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-# 윈도우와 리눅스에서 콘솔 제목 설정
-if os.name == "nt":
-    try:
-        ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
-    except:
-        pass
-else:
-    sys.stdout.write("\x1b]2;Ari Voice Command\x07")
+sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
 icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 if not os.path.exists(icon_path):
@@ -72,12 +62,7 @@ if not os.path.exists(icon_path):
 
 
 # 볼륨 제어를 위한 설정 (윈도우 전용)
-if os.name == "nt":
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    volume = cast(interface, POINTER(IAudioEndpointVolume))
-else:
-    volume = None  # 리눅스에서는 볼륨 제어를 지원하지 않음
+pulse = pulsectl.Pulse('volume-control')
 
 
 # 로그 설정
@@ -430,21 +415,14 @@ class MainWindow(QMainWindow):
 
 
 def main():
-	global ai_assistant, icon_path, tts_thread
-	if os.name == 'nt':
-		setproctitle.setproctitle("Ari Voice Command")
+	global ai_assistant, icon_path, tts_thread, pulse
+	setproctitle.setproctitle("Ari Voice Command")
 	try:
 		setup_logging()
 		logging.info("프로그램 시작")
 
-		# 윈도우와 리눅스에서 콘솔 제목 설정
-		if os.name == 'nt':
-			try:
-				ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
-			except:
-				pass
-		else:
-			sys.stdout.write("\x1b]2;Ari Voice Command\x07")
+		# 리눅스에서 콘솔 제목 설정
+		sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
 		app = QApplication(sys.argv)
 		main_window = MainWindow()
@@ -489,6 +467,7 @@ def main():
 		app.aboutToQuit.connect(main_window.tray_icon.exit)
 		app.aboutToQuit.connect(main_window.resource_monitor.stop)
 		app.aboutToQuit.connect(main_window.resource_monitor.wait)
+		app.aboutToQuit.connect(pulse.close)  # PulseAudio 연결 종료
 
 		sys.exit(app.exec())
 	except Exception as e:

@@ -17,6 +17,7 @@ import speech_recognition as sr
 import torch
 import pvporcupine
 import pyaudio
+import pulsectl
 import struct
 import threading
 from datetime import datetime, timedelta
@@ -48,7 +49,7 @@ speaker_ids = None
 whisper_model = None
 ai_assistant = None
 icon_path = None
-volume = None
+pulse = None
 active_timer = None
 active_shutdown_timer = None
 
@@ -433,10 +434,10 @@ def execute_command(command):
         adjust_volume(-0.1)
         text_to_speech("볼륨을 낮췄습니다.")
     elif "음소거 해제" in command:
-        volume.SetMute(0, None)
+        adjust_volume(0)  # 음소거 해제를 위해 현재 볼륨을 유지
         text_to_speech("음소거가 해제되었습니다.")
     elif "음소거" in command:
-        volume.SetMute(1, None)
+        adjust_volume(-1)  # 음소거를 위해 볼륨을 0으로 설정
         text_to_speech("음소거 되었습니다.")
     elif "타이머" in command:
         if "취소" in command or "끄기" in command or "중지" in command:
@@ -479,9 +480,17 @@ def get_current_time():
 
 
 def adjust_volume(change):
-    current_volume = volume.GetMasterVolumeLevelScalar()
-    new_volume = min(1.0, max(0.0, current_volume + change))
-    volume.SetMasterVolumeLevelScalar(new_volume, None)
+    global pulse
+    if pulse is None:
+        pulse = pulsectl.Pulse('volume-control')
+    
+    try:
+        sink = pulse.get_sink_by_name('@DEFAULT_SINK@')
+        current_volume = sink.volume.value_flat
+        new_volume = max(0.0, min(1.0, current_volume + change))
+        pulse.volume_set_all_chans(sink, new_volume)
+    except pulsectl.PulseOperationFailed:
+        logging.error("볼륨 조절 실패")
 
 
 def set_timer_from_command(command):
