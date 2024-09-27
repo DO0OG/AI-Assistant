@@ -56,10 +56,14 @@ active_timer = None
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 
-try:
-    ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
-except:
-    pass
+# 윈도우와 리눅스에서 콘솔 제목 설정
+if os.name == "nt":
+    try:
+        ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
+    except:
+        pass
+else:
+    sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
 icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 if not os.path.exists(icon_path):
@@ -67,10 +71,13 @@ if not os.path.exists(icon_path):
     icon_path = None  # 아이콘 파일이 없을 경우 None으로
 
 
-# 볼륨 제어를 위한 설정
-devices = AudioUtilities.GetSpeakers()
-interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-volume = cast(interface, POINTER(IAudioEndpointVolume))
+# 볼륨 제어를 위한 설정 (윈도우 전용)
+if os.name == "nt":
+    devices = AudioUtilities.GetSpeakers()
+    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    volume = cast(interface, POINTER(IAudioEndpointVolume))
+else:
+    volume = None  # 리눅스에서는 볼륨 제어를 지원하지 않음
 
 
 # 로그 설정
@@ -297,7 +304,8 @@ class SystemTrayIcon(QSystemTrayIcon):
 
 
 class MainWindow(QMainWindow):
-    setproctitle.setproctitle("Ari Voice Command")
+    if os.name == 'nt':
+        setproctitle.setproctitle("Ari Voice Command")
     
     def __init__(self):
         super().__init__()
@@ -423,10 +431,20 @@ class MainWindow(QMainWindow):
 
 def main():
 	global ai_assistant, icon_path, tts_thread
-	setproctitle.setproctitle("Ari Voice Command")
+	if os.name == 'nt':
+		setproctitle.setproctitle("Ari Voice Command")
 	try:
 		setup_logging()
 		logging.info("프로그램 시작")
+
+		# 윈도우와 리눅스에서 콘솔 제목 설정
+		if os.name == 'nt':
+			try:
+				ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
+			except:
+				pass
+		else:
+			sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
 		app = QApplication(sys.argv)
 		main_window = MainWindow()
