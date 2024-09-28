@@ -5,11 +5,12 @@ import time
 import logging
 from urllib.parse import quote_plus
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
 import warnings
 import gc
 import whisper
@@ -17,7 +18,8 @@ import speech_recognition as sr
 import torch
 import pvporcupine
 import pyaudio
-import pulsectl
+import sounddevice as sd
+import numpy as np
 import struct
 import threading
 from datetime import datetime, timedelta
@@ -153,10 +155,7 @@ def text_to_speech(text):
 
 
 def shutdown_computer():
-    if os.name == "nt":  # Windows
-        os.system("shutdown /s /t 1")
-    else:  # Linux나 macOS
-        os.system("sudo shutdown -h now")
+    os.system("sudo shutdown -h now")
 
 
 def cancel_timer():
@@ -230,10 +229,10 @@ def open_website(url):
 def search_and_play_youtube(query, play=True):
     search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
     try:
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")  # 브라우저를 표시하지 않음
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=options
+        options = Options()
+        options.add_argument("--headless")
+        driver = webdriver.Firefox(
+            service=Service(GeckoDriverManager().install()), options=options
         )
 
         driver.get(search_url)
@@ -480,17 +479,14 @@ def get_current_time():
 
 
 def adjust_volume(change):
-    global pulse
-    if pulse is None:
-        pulse = pulsectl.Pulse('volume-control')
-    
     try:
-        sink = pulse.get_sink_by_name('@DEFAULT_SINK@')
-        current_volume = sink.volume.value_flat
-        new_volume = max(0.0, min(1.0, current_volume + change))
-        pulse.volume_set_all_chans(sink, new_volume)
-    except pulsectl.PulseOperationFailed:
-        logging.error("볼륨 조절 실패")
+        current_volume = sd.get_stream().device['default_samplerate']
+        new_volume = max(0, min(100, current_volume + int(change * 100)))
+        sd.default.device = (sd.default.device[0], sd.default.device[1])
+        sd.default.samplerate = new_volume
+        logging.info(f"볼륨이 {new_volume}로 조정되었습니다.")
+    except Exception as e:
+        logging.error(f"볼륨 조절 실패: {str(e)}")
 
 
 def set_timer_from_command(command):
@@ -575,13 +571,12 @@ class VoiceRecognitionThread(QThread):
         super().__init__()
         self.running = True
         self.porcupine = None
-        self.pa = None
         self.audio_stream = None
         self.selected_microphone = selected_microphone
         self.microphone_index = None
         self.access_key = config["picovoice_access_key"]
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        self.keyword_path = os.path.join(current_dir, "아리야아_ko_windows_v3_0_0.ppn")
+        self.keyword_path = os.path.join(current_dir, "아리야아_ko_raspberry-pi_v3_0_0.ppn")
         self.model_path = os.path.join(current_dir, "porcupine_params_ko.pv")
 
         if not os.path.exists(self.keyword_path):
@@ -594,8 +589,8 @@ class VoiceRecognitionThread(QThread):
             self.init_audio()
 
             while self.running:
-                pcm = self.audio_stream.read(self.porcupine.frame_length)
-                pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
+                pcm, _ = self.audio_stream.read(self.porcupine.frame_length)
+                pcm = pcm.flatten().astype(np.int16)
 
                 keyword_index = self.porcupine.process(pcm)
                 if keyword_index >= 0:
@@ -617,21 +612,22 @@ class VoiceRecognitionThread(QThread):
         logging.info("Porcupine 초기화 완료")
 
     def init_audio(self):
-        logging.info("PyAudio 초기화 중...")
-        self.pa = pyaudio.PyAudio()
-        logging.info("PyAudio 초기화 완료")
+        logging.info("오디오 초기화 중...")
+        sd.default.samplerate = self.porcupine.sample_rate
+        sd.default.channels = 1
+        logging.info("오디오 초기화 완료")
 
         self.init_microphone()
 
         logging.info("오디오 스트림 열기...")
-        self.audio_stream = self.pa.open(
-            rate=self.porcupine.sample_rate,
+        self.audio_stream = sd.InputStream(
+            samplerate=self.porcupine.sample_rate,
             channels=1,
-            format=pyaudio.paInt16,
-            input=True,
-            input_device_index=self.microphone_index,
-            frames_per_buffer=self.porcupine.frame_length,
+            dtype=np.int16,
+            blocksize=self.porcupine.frame_length,
+            device=self.microphone_index
         )
+        self.audio_stream.start()
         logging.info("오디오 스트림 열기 완료")
 
     def handle_wake_word(self):
@@ -645,10 +641,9 @@ class VoiceRecognitionThread(QThread):
 
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
-        if self.audio_stream is not None:
+        if hasattr(self, 'audio_stream') and self.audio_stream:
+            self.audio_stream.stop()
             self.audio_stream.close()
-        if self.pa is not None:
-            self.pa.terminate()
         if self.porcupine is not None:
             self.porcupine.delete()
         logging.info("음성 인식 스레드 종료 완료")

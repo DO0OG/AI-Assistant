@@ -10,7 +10,8 @@ import psutil
 import speech_recognition as sr
 import time
 import warnings
-import pulsectl
+import sounddevice as sd
+import numpy as np
 from PySide6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -55,14 +56,19 @@ os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
-icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
 if not os.path.exists(icon_path):
     print(f"경고: 아이콘 파일을 찾을 수 없습니다: {icon_path}")
     icon_path = None  # 아이콘 파일이 없을 경우 None으로
 
 
-# 볼륨 제어를 위한 설정 (윈도우 전용)
-pulse = pulsectl.Pulse('volume-control')
+# 볼륨 제어를 위한 설정
+def init_audio():
+    try:
+        sd.default.device = sd.default.device  # 기본 장치 설정
+        logging.info("오디오 초기화 완료")
+    except Exception as e:
+        logging.error(f"오디오 초기화 실패: {str(e)}")
 
 
 # 로그 설정
