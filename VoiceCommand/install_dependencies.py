@@ -9,7 +9,7 @@ def install(package):
 
 def create_requirements_file():
     requirements = [
-        "pulsectl",
+        "sounddevice",
         "keyboard",
         "openai-whisper",
         "SpeechRecognition",
@@ -26,10 +26,10 @@ def create_requirements_file():
         "geopy",
         "requests",
         "psutil",
-        "setproctitle",
         "urllib3",
         "datetime",
         "python-dotenv",
+        "git+https://github.com/myshell-ai/MeloTTS.git",
     ]
 
     with open("requirements.txt", "w") as f:
@@ -59,7 +59,15 @@ def main():
     print("\n일부 패키지는 시스템 패키지 관리자를 통해 설치해야 할 수 있습니다.")
     print("다음 명령어를 실행하여 필요한 시스템 패키지를 설치하세요:")
     print("sudo apt-get update")
-    print("sudo apt-get install python3-pyaudio portaudio19-dev")
+    print("sudo apt-get install python3-pyaudio portaudio19-dev libatlas-base-dev")
+    print("sudo apt-get install firefox-esr")  # Firefox 설치 (웹 자동화용)
+    print("sudo apt-get install libasound2-dev")  # ALSA 개발 라이브러리 설치
+    print("sudo apt-get install git")  # Git 설치 (MeloTTS 설치에 필요)
+
+    # MeloTTS 설치 안내
+    print("\nMeloTTS를 설치하려면 다음 명령어를 실행하세요:")
+    print("pip install git+https://github.com/myshell-ai/MeloTTS.git")
+
 
 if __name__ == "__main__":
     main()
