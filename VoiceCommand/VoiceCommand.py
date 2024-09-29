@@ -43,7 +43,8 @@ from PySide6.QtCore import (
 from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
-from Config import config
+from Config import use_api
+import requests
 
 # 전역 변수 선언
 tts_model = None
@@ -290,7 +291,7 @@ def get_weather_info(lat, lon):
     base_url = (
         "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
     )
-    service_key = config["weather_api_key"]
+    service_key = use_api("weather_api_key")
 
     now = datetime.now()
     base_date = now.strftime("%Y%m%d")
@@ -574,7 +575,7 @@ class VoiceRecognitionThread(QThread):
         self.audio_stream = None
         self.selected_microphone = selected_microphone
         self.microphone_index = None
-        self.access_key = config["picovoice_access_key"]
+        self.access_key = use_api("picovoice_access_key")
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.keyword_path = os.path.join(current_dir, "아리야아_ko_raspberry-pi_v3_0_0.ppn")
         self.model_path = os.path.join(current_dir, "porcupine_params_ko.pv")
