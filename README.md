@@ -63,6 +63,10 @@
 - 기본적으로 AI 모델은 설치 과정에서 [Bllossom](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M)을 다운로드 합니다.
 - 다른 모델을 사용하길 원하면 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
 
+### 캐릭터 위젯
+- 캐릭터 위젯은 images 폴더 속 각각의 양식에 따라 수정하여 사용자가 커스터마이징 할 수 있습니다.
+- 파일의 갯수와 번호는 꼭 알맞게 작성해야 합니다.
+
 
 ## 의존성
 - Python 3.11+
