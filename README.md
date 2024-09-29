@@ -60,7 +60,7 @@
 ## 설정
 
 ### AI 모델
-- 기본적으로 AI 모델은 [Bllossom](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M)이 포함되어 있습니다.
+- 기본적으로 AI 모델은 설치 과정에서 [Bllossom](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M)을 다운로드 합니다.
 - 다른 모델을 사용하길 원하면 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
 
 
