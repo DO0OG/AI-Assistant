@@ -192,7 +192,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         QApplication.instance().quit()
 
     def on_model_loaded(self):
-        # 이 메서드는 더 이상 필요하지 않지만, 오류를 방지하기 위해 빈 메서드로 유지합니다.
+        # 이 메서드는 더 이상 필요하지 않지만, 오류를 방지하기 위해 빈 메서드로 유지
         pass
 
     def create_menu(self):
@@ -397,7 +397,6 @@ class MainWindow(QMainWindow):
         self.tray_icon.showMessage(
             "Ari", "TTS 및 Whisper 모델 로딩 완료!", QSystemTrayIcon.Information, 3000
         )
-        # 여기에 모델 로딩 완료 후 수행할 추가 작업을 넣을 수 있습니다.
 
     def show_loading_progress(self, message):
         self.tray_icon.showMessage("Ari", message, QSystemTrayIcon.Information, 2000)
