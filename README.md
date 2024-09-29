@@ -59,21 +59,9 @@
 
 ## 설정
 
-### config.json
-- 이 프로젝트를 실행하기 위해서는 `config.json` 파일이 필요합니다. 다음과 같은 형식으로 작성하세요:
-```
-{
-
-     "weather_api_key": "your_weather_api_key_here",
-     "picovoice_access_key": "your_picovoice_access_key_here"
-     
-}
-```
-- `config.json` 파일은 보안상의 이유로 Git 저장소에 포함되지 않습니다.
-
 ### AI 모델
-- 기본적으로 AI 모델은 프로그램에 포함되지 않습니다.
-- 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
+- 기본적으로 AI 모델은 [Bllossom](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M)이 포함되어 있습니다.
+- 다른 모델을 사용하길 원하면 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
 
 
 ## 의존성
