@@ -2,6 +2,10 @@ import os
 import glob
 from llama_cpp import Llama
 import requests
+import json
+from collections import Counter
+import time
+import threading
 
 
 class AIAssistant:
@@ -40,6 +44,13 @@ class AIAssistant:
             print("무료 API를 사용하여 계속합니다...")
             self.use_api = True
 
+        self.command_cache = {}
+        self.command_counter = Counter()
+        self.cache_threshold = 3  # 이 횟수 이상 입력된 명령어는 캐시에 저장
+        self.cache_expiry = 7 * 24 * 60 * 60  # 캐시 유효 기간 (7일)
+        self.load_cache()
+        self.start_periodic_cache_cleaning()
+
     def find_gguf_model(self):
         model_dir = os.path.join(os.path.dirname(__file__), "models")
         gguf_files = glob.glob(os.path.join(model_dir, "*.gguf"))
@@ -77,6 +88,16 @@ class AIAssistant:
             return "죄송합니다, 응답을 생성하는 중 오류가 발생했습니다."
 
     def process_query(self, query):
+        self.command_counter[query] += 1
+        
+        current_time = time.time()
+        if query in self.command_cache:
+            cached_response, timestamp = self.command_cache[query]
+            if current_time - timestamp < self.cache_expiry:
+                return cached_response
+            else:
+                del self.command_cache[query]  # 만료된 캐시 삭제
+
         full_prompt = f"""
 당신은 AI 비서 '아리'입니다. 다음 지침을 엄격히 따라주세요:
 
@@ -125,8 +146,45 @@ class AIAssistant:
                 if response.startswith(prefix):
                     response = response[len(prefix) :].strip()
         print(f"AI: {response}")
+        if self.command_counter[query] >= self.cache_threshold:
+            self.command_cache[query] = (response, current_time)
+            self.save_cache()
         return response
 
+    def load_cache(self):
+        try:
+            with open('command_cache.json', 'r', encoding='utf-8') as f:
+                self.command_cache = json.load(f)
+            # 저장된 시간 정보를 float으로 변환
+            self.command_cache = {k: (v[0], float(v[1])) for k, v in self.command_cache.items()}
+            self.clean_expired_cache()
+        except FileNotFoundError:
+            self.command_cache = {}
+
+    def save_cache(self):
+        with open('command_cache.json', 'w', encoding='utf-8') as f:
+            json.dump(self.command_cache, f, ensure_ascii=False, indent=2)
+
+    def clean_expired_cache(self):
+        current_time = time.time()
+        expired_keys = [k for k, (_, timestamp) in self.command_cache.items() 
+                        if current_time - timestamp >= self.cache_expiry]
+        for key in expired_keys:
+            del self.command_cache[key]
+        if expired_keys:
+            self.save_cache()
+
+    def reset_cache(self):
+        self.command_cache = {}
+        self.command_counter.clear()
+        self.save_cache()
+
+    def start_periodic_cache_cleaning(self):
+        threading.Timer(24 * 60 * 60, self.periodic_cache_cleaning).start()  # 24시간마다 실행
+
+    def periodic_cache_cleaning(self):
+        self.clean_expired_cache()
+        self.start_periodic_cache_cleaning()  # 다음 주기 설정
 
 # AIAssistant 클래스의 인스턴스를 생성하는 함수
 def get_ai_assistant():
