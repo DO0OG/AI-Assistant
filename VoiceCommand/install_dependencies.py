@@ -19,7 +19,6 @@ def create_requirements_file():
         "selenium",
         "webdriver_manager",
         "transformers",
-        "llama-cpp-python",
         "numpy",
         "pyaudio",
         "pvporcupine",
@@ -29,6 +28,8 @@ def create_requirements_file():
         "urllib3",
         "datetime",
         "python-dotenv",
+        "scikit-learn",
+        "joblib",
         "git+https://github.com/myshell-ai/MeloTTS.git",
     ]
 
@@ -64,10 +65,11 @@ def main():
     print("sudo apt-get install libasound2-dev")  # ALSA 개발 라이브러리 설치
     print("sudo apt-get install git")  # Git 설치 (MeloTTS 설치에 필요)
 
-    # MeloTTS 설치 안내
-    print("\nMeloTTS를 설치하려면 다음 명령어를 실행하세요:")
-    print("pip install git+https://github.com/myshell-ai/MeloTTS.git")
+    # 폰트 설치 안내
+    print("\n'DNFBitBitv2.ttf' 폰트 파일을 프로젝트 디렉토리에 복사해주세요.")
 
+    # 설정 파일 생성 안내
+    print("\n'config.json' 파일을 생성하고 필요한 API 키를 입력해주세요.")
 
 if __name__ == "__main__":
     main()
