@@ -400,6 +400,7 @@ def convert_coord(lat, lon):
 
 
 def execute_command(command):
+    global ai_assistant
     logging.info(f"실행할 명령: {command}")
 
     # 사이트 이름을 매핑하는 사전
@@ -464,8 +465,38 @@ def execute_command(command):
             logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
             text_to_speech("날씨 정보를 가져오는 데 실패했습니다.")
     else:
-        response = ai_assistant.process_query(command)
-        text_to_speech(response)
+        if ai_assistant:
+            response = ai_assistant.process_query(command)
+            text_to_speech(response)
+            
+            # 응답의 적절성 확인
+            text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
+            feedback = get_voice_feedback()
+            
+            if feedback == "예":
+                ai_assistant.learn_from_interaction(True)
+            elif feedback == "아니오":
+                ai_assistant.learn_from_interaction(False)
+            else:
+                text_to_speech("죄송합니다. 응답을 이해하지 못했습니다.")
+        else:
+            text_to_speech("AI 어시스턴트가 초기화되지 않았습니다.")
+
+def get_voice_feedback():
+    r = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("피드백을 말씀해주세요...")
+        audio = r.listen(source, timeout=5, phrase_time_limit=3)
+    
+    try:
+        feedback = r.recognize_google(audio, language="ko-KR")
+        return feedback.lower()
+    except sr.UnknownValueError:
+        print("음성을 인식할 수 없습니다.")
+        return None
+    except sr.RequestError as e:
+        print(f"음성 인식 서비스 오류: {e}")
+        return None
 
 
 def get_current_time():
@@ -673,6 +704,22 @@ class VoiceRecognitionThread(QThread):
             text = r.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
+            
+            # AI 어시스턴트 응답 처리
+            response = ai_assistant.process_query(text)
+            text_to_speech(response)
+            
+            # 응답의 적절성 확인
+            text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
+            feedback = get_voice_feedback()
+            
+            if feedback == "예":
+                ai_assistant.learn_from_interaction(True)
+            elif feedback == "아니오":
+                ai_assistant.learn_from_interaction(False)
+            else:
+                text_to_speech("죄송합니다. 응답을 이해하지 못했습니다.")
+            
         except sr.UnknownValueError:
             logging.warning("음성을 인식할 수 없습니다.")
         except sr.RequestError as e:
