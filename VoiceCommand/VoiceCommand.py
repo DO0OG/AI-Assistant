@@ -401,12 +401,12 @@ def execute_command(command):
     logging.info(f"실행할 명령: {command}")
 
     if "학습 모드" in command:
-        if "활성화" in command or "시작" in command:
-            learning_mode = True
-            text_to_speech("학습 모드가 활성화되었습니다.")
-        elif "비활성화" in command or "종료" in command:
+        if "비활성화" in command or "종료" in command:
             learning_mode = False
             text_to_speech("학습 모드가 비활성화되었습니다.")
+        elif "활성화" in command or "시작" in command:
+            learning_mode = True
+            text_to_speech("학습 모드가 활성화되었습니다.")
         return
 
     # 사이트 이름을 매핑하는 사전
@@ -486,14 +486,14 @@ def execute_command(command):
                 if new_response:
                     ai_assistant.learn_new_response(command, new_response)
                     text_to_speech("새로운 응답을 학습했습니다. 감사합니다.")
-                    
+
                     # 강화학습 업데이트
                     ai_assistant.update_q_table(command, 'say_sorry', -1, command)
                 else:
                     text_to_speech("새로운 응답을 학습하지 못했습니다. 죄송합니다.")
             else:
                 text_to_speech("감사합니다. 앞으로도 좋은 답변을 드리도록 노력하겠습니다.")
-                
+
                 # 강화학습 업데이트
                 ai_assistant.update_q_table(command, 'use_best_response', 1, command)
 
