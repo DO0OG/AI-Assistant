@@ -12,49 +12,35 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.firefox import GeckoDriverManager
 import warnings
-import gc
-import whisper
 import speech_recognition as sr
 import torch
-import pvporcupine
 import pyaudio
 import sounddevice as sd
 import numpy as np
-import struct
 import threading
 from datetime import datetime, timedelta
 from queue import Queue
-import time
 import requests
-from datetime import datetime, timedelta
 import math
-from datetime import datetime, timedelta
-from PySide6.QtWidgets import (
-    QApplication,
-)
-from PySide6.QtCore import (
-    QThread,
-    Signal,
-    Qt,
-    QMetaObject,
-    Qt,
-    Q_ARG,
-)
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QThread, Signal
 from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from Config import use_api
-import requests
+import pvporcupine
+from vosk import Model, KaldiRecognizer
+import json
 
 # 전역 변수 선언
 tts_model = None
 speaker_ids = None
-whisper_model = None
 ai_assistant = None
 icon_path = None
 pulse = None
 active_timer = None
 active_shutdown_timer = None
+
 
 def set_ai_assistant(assistant):
     global ai_assistant
@@ -63,6 +49,7 @@ def set_ai_assistant(assistant):
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 # 모델 로딩 스레드
 class ModelLoadingThread(QThread):
@@ -84,28 +71,33 @@ class ModelLoadingThread(QThread):
             self.finished.emit()
 
 
-class WhisperModelManager:
-    def __init__(self):
-        pass
+class VoskRecognizer:
+    def __init__(self, model_path):
+        self.model = Model(model_path)
+        self.recognizer = KaldiRecognizer(self.model, 16000)
+        self.mic = pyaudio.PyAudio()
+        self.stream = self.mic.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=16000,
+            input=True,
+            frames_per_buffer=8192,
+        )
+        self.stream.start_stream()
 
-    def load_model(self):
-        logging.info("Whisper 모델 로딩 중...")
-        model = whisper.load_model("small", device=device)
-        logging.info("Whisper 모델 로딩 완료.")
-        return model
+    def listen(self):
+        while True:
+            data = self.stream.read(4096)
+            if len(data) == 0:
+                break
+            if self.recognizer.AcceptWaveform(data):
+                result = self.recognizer.Result()
+                return result
 
-    def unload_model(self, model):
-        del model
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        logging.info("Whisper 모델 언로드 완료.")
-
-    def transcribe(self, audio_file):
-        model = self.load_model()
-        result = model.transcribe(audio_file, language="ko", fp16=False)
-        self.unload_model(model)
-        return result["text"].strip().lower()
+    def close(self):
+        self.stream.stop_stream()
+        self.stream.close()
+        self.mic.terminate()
 
 
 def text_to_speech(text):
@@ -162,11 +154,11 @@ def shutdown_computer():
 def cancel_timer():
     global active_timer, active_shutdown_timer
     if active_timer:
-        active_timer['timer'].cancel()
+        active_timer["timer"].cancel()
         active_timer = None
         text_to_speech("타이머가 취소되었습니다.")
     if active_shutdown_timer:
-        active_shutdown_timer['timer'].cancel()
+        active_shutdown_timer["timer"].cancel()
         active_shutdown_timer = None
         text_to_speech("컴퓨터 종료 타이머가 취소되었습니다.")
     if not active_timer and not active_shutdown_timer:
@@ -178,7 +170,7 @@ def set_timer(minutes):
 
     def timer_thread():
         global active_timer
-        if active_timer and datetime.now() >= active_timer['end_time']:
+        if active_timer and datetime.now() >= active_timer["end_time"]:
             text_to_speech(f"{minutes}분 타이머가 완료되었습니다.")
             active_timer = None
         elif active_timer:
@@ -186,14 +178,11 @@ def set_timer(minutes):
             threading.Timer(1, timer_thread).start()
 
     if active_timer:
-        active_timer['timer'].cancel()
-    
+        active_timer["timer"].cancel()
+
     end_time = datetime.now() + timedelta(minutes=minutes)
-    active_timer = {
-        'timer': threading.Timer(1, timer_thread),
-        'end_time': end_time
-    }
-    active_timer['timer'].start()
+    active_timer = {"timer": threading.Timer(1, timer_thread), "end_time": end_time}
+    active_timer["timer"].start()
     text_to_speech(f"{minutes}분 타이머를 설정했습니다.")
 
 
@@ -202,7 +191,10 @@ def set_shutdown_timer(minutes):
 
     def shutdown_timer_thread():
         global active_shutdown_timer
-        if active_shutdown_timer and datetime.now() >= active_shutdown_timer['end_time']:
+        if (
+            active_shutdown_timer
+            and datetime.now() >= active_shutdown_timer["end_time"]
+        ):
             text_to_speech(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
             shutdown_computer()
             active_shutdown_timer = None
@@ -211,14 +203,14 @@ def set_shutdown_timer(minutes):
             threading.Timer(1, shutdown_timer_thread).start()
 
     if active_shutdown_timer:
-        active_shutdown_timer['timer'].cancel()
-    
+        active_shutdown_timer["timer"].cancel()
+
     end_time = datetime.now() + timedelta(minutes=minutes)
     active_shutdown_timer = {
-        'timer': threading.Timer(1, shutdown_timer_thread),
-        'end_time': end_time
+        "timer": threading.Timer(1, shutdown_timer_thread),
+        "end_time": end_time,
     }
-    active_shutdown_timer['timer'].start()
+    active_shutdown_timer["timer"].start()
     text_to_speech(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
 
 
@@ -468,11 +460,11 @@ def execute_command(command):
         if ai_assistant:
             response = ai_assistant.process_query(command)
             text_to_speech(response)
-            
+
             # 응답의 적절성 확인
             text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
             feedback = get_voice_feedback()
-            
+
             if feedback == "예":
                 ai_assistant.learn_from_interaction(True)
             elif feedback == "아니오":
@@ -482,12 +474,13 @@ def execute_command(command):
         else:
             text_to_speech("AI 어시스턴트가 초기화되지 않았습니다.")
 
+
 def get_voice_feedback():
     r = sr.Recognizer()
     with sr.Microphone() as source:
         print("피드백을 말씀해주세요...")
         audio = r.listen(source, timeout=5, phrase_time_limit=3)
-    
+
     try:
         feedback = r.recognize_google(audio, language="ko-KR")
         return feedback.lower()
@@ -512,10 +505,12 @@ def get_current_time():
 
 def adjust_volume(change):
     try:
-        current_volume = sd.get_stream().device['default_samplerate']
+        import alsaaudio
+
+        mixer = alsaaudio.Mixer()
+        current_volume = mixer.getvolume()[0]
         new_volume = max(0, min(100, current_volume + int(change * 100)))
-        sd.default.device = (sd.default.device[0], sd.default.device[1])
-        sd.default.samplerate = new_volume
+        mixer.setvolume(new_volume)
         logging.info(f"볼륨이 {new_volume}로 조정되었습니다.")
     except Exception as e:
         logging.error(f"볼륨 조절 실패: {str(e)}")
@@ -546,7 +541,11 @@ class VoiceCommandThread(QThread):
     def __init__(self):
         super().__init__()
         self.recognizer = sr.Recognizer()
-        self.whisper_manager = WhisperModelManager()
+        self.vosk_recognizer = VoskRecognizer(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "vosk-model-small-ko-0.22"
+            )
+        )
         self.is_running = True
         self.is_listening = False
         self.is_processing = False
@@ -564,12 +563,22 @@ class VoiceCommandThread(QThread):
                             source, timeout=5, phrase_time_limit=5
                         )
                     logging.info("음성 인식 중...")
-                    with open("temp_audio.wav", "wb") as f:
-                        f.write(audio.get_wav_data())
-                    command = self.whisper_manager.transcribe("temp_audio.wav")
-                    logging.info(f"인식된 명령: {command}")
-                    if command:
+
+                    # Vosk를 사용한 음성 인식
+                    raw_data = audio.get_raw_data(convert_rate=16000, convert_width=2)
+                    vosk_result = self.vosk_recognizer.process_audio(raw_data)
+                    if vosk_result:
+                        command = vosk_result
+                        logging.info(f"Vosk로 인식된 명령: {command}")
                         self.command_signal.emit(command)
+                    else:
+                        # Vosk로 인식되지 않은 경우, Google Speech Recognition 사용
+                        command = self.recognizer.recognize_google(
+                            audio, language="ko-KR"
+                        )
+                        logging.info(f"Google로 인식된 명령: {command}")
+                        self.command_signal.emit(command)
+
                 except sr.WaitTimeoutError:
                     logging.warning("음성 입력 대기 시간 초과")
                 except sr.UnknownValueError:
@@ -578,9 +587,6 @@ class VoiceCommandThread(QThread):
                     logging.error(f"오류 발생: {str(e)}")
                 finally:
                     self.is_processing = False
-                    if os.path.exists("temp_audio.wav"):
-                        os.remove("temp_audio.wav")
-                    self.whisper_manager.unload_model()  # 사용 후 모델 언로드
             time.sleep(0.1)
 
     def stop(self):
@@ -595,25 +601,31 @@ class VoiceCommandThread(QThread):
         self.is_listening = not self.is_listening
         logging.info(f"음성 인식 {'활성화' if self.is_listening else '비활성화'}")
 
+
 class VoiceRecognitionThread(QThread):
     result = Signal(str)
     listening_state_changed = Signal(bool)
 
-    def __init__(self, selected_microphone=None):
+    def __init__(self):
         super().__init__()
         self.running = True
         self.porcupine = None
         self.audio_stream = None
-        self.selected_microphone = selected_microphone
-        self.microphone_index = None
         self.access_key = use_api("picovoice_access_key")
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        self.keyword_path = os.path.join(current_dir, "아리야아_ko_raspberry-pi_v3_0_0.ppn")
+        self.keyword_path = os.path.join(
+            current_dir, "아리야아_ko_raspberry-pi_v3_0_0.ppn"
+        )
         self.model_path = os.path.join(current_dir, "porcupine_params_ko.pv")
+        self.vosk_model = Model(os.path.join(current_dir, "vosk-model-ko-0.22"))
+        self.recognizer = KaldiRecognizer(self.vosk_model, 16000)
+        self.is_listening = False
+        self.is_processing = False
+        self.is_tts_playing = False
 
-        if not os.path.exists(self.keyword_path):
-            logging.error(f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}")
-            raise FileNotFoundError(f"키워드 파일을 찾을 수 없습니다: {self.keyword_path}")
+        # Vosk 모델 초기화 추가
+        self.vosk_model_path = os.path.join(current_dir, "vosk-model-ko-0.22")
+        self.vosk_recognizer = VoskRecognizer(self.vosk_model_path)
 
     def run(self):
         try:
@@ -621,12 +633,39 @@ class VoiceRecognitionThread(QThread):
             self.init_audio()
 
             while self.running:
-                pcm, _ = self.audio_stream.read(self.porcupine.frame_length)
-                pcm = pcm.flatten().astype(np.int16)
+                pcm = self.audio_stream.read(
+                    self.porcupine.frame_length, exception_on_overflow=False
+                )
+                pcm = np.frombuffer(pcm, dtype=np.int16)
 
                 keyword_index = self.porcupine.process(pcm)
                 if keyword_index >= 0:
                     self.handle_wake_word()
+
+                # Vosk를 사용한 음성 인식 추가
+                if (
+                    self.is_listening
+                    and not self.is_processing
+                    and not self.is_tts_playing
+                ):
+                    try:
+                        self.is_processing = True
+                        pcm = self.audio_stream.read(
+                            self.porcupine.frame_length, exception_on_overflow=False
+                        )
+                        pcm = np.frombuffer(pcm, dtype=np.int16)
+
+                        # Vosk로 음성 인식
+                        if self.recognizer.AcceptWaveform(pcm.tobytes()):
+                            result = self.recognizer.Result()
+                            vosk_result = json.loads(result)["text"]
+                            if vosk_result:
+                                logging.info(f"Vosk 인식 결과: {vosk_result}")
+                                self.result.emit(vosk_result)
+                    except Exception as e:
+                        logging.error(f"Vosk 음성 인식 중 오류 발생: {str(e)}")
+                    finally:
+                        self.is_processing = False
 
         except Exception as e:
             logging.error(f"오류 발생: {str(e)}", exc_info=True)
@@ -645,22 +684,33 @@ class VoiceRecognitionThread(QThread):
 
     def init_audio(self):
         logging.info("오디오 초기화 중...")
-        sd.default.samplerate = self.porcupine.sample_rate
-        sd.default.channels = 1
-        logging.info("오디오 초기화 완료")
+        p = pyaudio.PyAudio()
 
-        self.init_microphone()
+        # ALSA 장치 찾기
+        alsa_device_index = None
+        for i in range(p.get_device_count()):
+            dev_info = p.get_device_info_by_index(i)
+            if "sysdefault" in dev_info["name"].lower():
+                alsa_device_index = i
+                break
 
-        logging.info("오디오 스트림 열기...")
-        self.audio_stream = sd.InputStream(
-            samplerate=self.porcupine.sample_rate,
+        if alsa_device_index is None:
+            logging.warning(
+                "ALSA 기본 장치를 찾을 수 없습니다. 시스템 기본 장치를 사용합니다."
+            )
+            alsa_device_index = p.get_default_input_device_info()["index"]
+
+        logging.info(f"선택된 ALSA 장치 인덱스: {alsa_device_index}")
+
+        self.audio_stream = p.open(
+            rate=self.porcupine.sample_rate,
             channels=1,
-            dtype=np.int16,
-            blocksize=self.porcupine.frame_length,
-            device=self.microphone_index
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=self.porcupine.frame_length,
+            input_device_index=alsa_device_index,
         )
-        self.audio_stream.start()
-        logging.info("오디오 스트림 열기 완료")
+        logging.info("오디오 초기화 완료")
 
     def handle_wake_word(self):
         logging.info("웨이크 워드 '아리야' 감지!")
@@ -673,26 +723,12 @@ class VoiceRecognitionThread(QThread):
 
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
-        if hasattr(self, 'audio_stream') and self.audio_stream:
-            self.audio_stream.stop()
+        if hasattr(self, "audio_stream") and self.audio_stream:
+            self.audio_stream.stop_stream()
             self.audio_stream.close()
         if self.porcupine is not None:
             self.porcupine.delete()
         logging.info("음성 인식 스레드 종료 완료")
-
-    def init_microphone(self):
-        if self.selected_microphone:
-            self.microphone_index = self.get_device_index(self.selected_microphone)
-        else:
-            self.microphone_index = None
-        logging.info(f"선택된 마이크 인덱스: {self.microphone_index}")
-
-    def get_device_index(self, device_name):
-        for index, name in enumerate(sr.Microphone.list_microphone_names()):
-            if device_name in name:
-                return index
-        logging.warning(f"지정된 마이크를 찾을 수 없습니다: {device_name}. 기본 마이크를 사용합니다.")
-        return None
 
     def recognize_speech(self):
         r = sr.Recognizer()
@@ -704,22 +740,22 @@ class VoiceRecognitionThread(QThread):
             text = r.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
-            
+
             # AI 어시스턴트 응답 처리
             response = ai_assistant.process_query(text)
             text_to_speech(response)
-            
+
             # 응답의 적절성 확인
             text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
             feedback = get_voice_feedback()
-            
+
             if feedback == "예":
                 ai_assistant.learn_from_interaction(True)
             elif feedback == "아니오":
                 ai_assistant.learn_from_interaction(False)
             else:
                 text_to_speech("죄송합니다. 응답을 이해하지 못했습니다.")
-            
+
         except sr.UnknownValueError:
             logging.warning("음성을 인식할 수 없습니다.")
         except sr.RequestError as e:
@@ -730,10 +766,6 @@ class VoiceRecognitionThread(QThread):
     def stop(self):
         self.running = False
         self.wait()  # 스레드가 완전히 종료될 때까지 대기
-
-    def set_microphone(self, microphone_name):
-        self.selected_microphone = microphone_name
-        self.init_microphone()
 
 
 # TTS 스레드

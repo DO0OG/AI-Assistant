@@ -22,18 +22,23 @@ def load_config():
             return json.load(f)
 
 
-def use_api(key_name):
+def use_api(key_name, api_url=None, params={}):
     try:
         encrypted_key = config[key_name]
-        response = requests.post(
-            f"{SERVER_URL}/decrypt_key", json={"encrypted_key": encrypted_key}
-        )
+        response = requests.post(f"{SERVER_URL}/decrypt_and_use", json={
+            'encrypted_key': encrypted_key,
+            'api_url': api_url,
+            'params': params
+        })
         if response.status_code == 200:
-            return response.text  # 복호화된 키를 문자열로 반환
+            if api_url:
+                return response.json()
+            else:
+                return response.text  # 복호화된 키를 문자열로 반환
         else:
-            raise Exception(f"키 복호화 실패. 상태 코드: {response.status_code}")
+            raise Exception(f"API 사용 실패. 상태 코드: {response.status_code}")
     except Exception as e:
-        print(f"API 키 복호화 중 오류 발생: {e}")
+        print(f"API 사용 중 오류 발생: {e}")
         return None
 
 
