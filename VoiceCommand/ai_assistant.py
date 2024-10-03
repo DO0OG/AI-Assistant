@@ -37,6 +37,7 @@ class AdvancedAIAssistant(nn.Module):
         
         self.save_counter = 0
         self.save_interval = 1  # 1번 학습할 때마다 저장
+        self.similarity_threshold = 0.9  # 유사도 임계값
 
     def forward(self, input_ids, attention_mask):
         bert_output = self.bert(input_ids=input_ids, attention_mask=attention_mask)[0]
@@ -58,18 +59,16 @@ class AdvancedAIAssistant(nn.Module):
         
         # 응답 선택
         if not self.responses:  # self.responses가 비어 있는 경우
-            response = "죄송합니다. 아직 학습된 응답이 없습니다."
-        else:
-            similarities = torch.cosine_similarity(output, torch.stack([r['vector'] for r in self.responses]))
-            best_response_idx = similarities.argmax().item()
-            best_response = self.responses[best_response_idx]['text']
+            return "죄송합니다. 적절한 응답을 찾지 못했습니다.", entities, sentiment
         
-        # 강화학습을 통한 응답 선택
-        state = query
-        action = self.choose_action(state)
+        similarities = torch.cosine_similarity(output, torch.stack([r['vector'] for r in self.responses]))
+        best_response_idx = similarities.argmax().item()
+        max_similarity = similarities[best_response_idx].item()
         
-        if action == 'use_best_response' and self.responses:
-            response = best_response
+        logging.info(f"최대 유사도: {max_similarity}")  # 디버깅을 위한 로그 추가
+        
+        if max_similarity >= self.similarity_threshold:
+            response = self.responses[best_response_idx]['text']
         else:
             response = "죄송합니다. 적절한 응답을 찾지 못했습니다."
         
