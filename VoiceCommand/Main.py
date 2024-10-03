@@ -32,7 +32,7 @@ from PySide6.QtCore import (
     Signal,
     QTimer,
 )
-from ai_assistant import get_ai_assistant
+from ai_assistant import AdvancedAIAssistant, get_ai_assistant
 from collections import deque
 from CharacterWidget import CharacterWidget
 from VoiceCommand import (
@@ -429,70 +429,81 @@ class MainWindow(QMainWindow):
 
 
 def main():
-	global ai_assistant, icon_path, tts_thread
-	if os.name == 'nt':
-		setproctitle.setproctitle("Ari Voice Command")
-	try:
-		setup_logging()
-		logging.info("프로그램 시작")
+    global ai_assistant, icon_path, tts_thread
+    if os.name == "nt":
+        setproctitle.setproctitle("Ari Voice Command")
+    try:
+        setup_logging()
+        logging.info("프로그램 시작")
 
-		# 윈도우와 리눅스에서 콘솔 제목 설정
-		if os.name == 'nt':
-			try:
-				ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
-			except:
-				pass
-		else:
-			sys.stdout.write("\x1b]2;Ari Voice Command\x07")
+        # 윈도우와 리눅스에서 콘솔 제목 설정
+        if os.name == "nt":
+            try:
+                ctypes.windll.kernel32.SetConsoleTitleW("Ari Voice Command")
+            except:
+                pass
+        else:
+            sys.stdout.write("\x1b]2;Ari Voice Command\x07")
 
-		app = QApplication(sys.argv)
-		main_window = MainWindow()
-		main_window.show()
+        app = QApplication(sys.argv)
+        
+        # AI 어시스턴트 초기화 또는 로드
+        model_path = "./saved_model"
+        if os.path.exists(model_path) and os.path.isfile(os.path.join(model_path, 'model_weights.pth')):
+            try:
+                logging.info("기존 모델을 로드합니다.")
+                ai_assistant = AdvancedAIAssistant.load_model(model_path)
+                logging.info("모델 로드 완료")
+            except Exception as e:
+                logging.error(f"모델 로드 중 오류 발생: {str(e)}")
+                logging.info("새로운 AI 어시스턴트를 초기화합니다.")
+                ai_assistant = get_ai_assistant()
+        else:
+            logging.info("저장된 모델이 없습니다. 새로운 AI 어시스턴트를 초기화합니다.")
+            ai_assistant = get_ai_assistant()
 
-		if not QSystemTrayIcon.isSystemTrayAvailable():
-			logging.error("시스템 트레이를 사용할 수 없습니다.")
-			sys.exit(1)
+        set_ai_assistant(ai_assistant)  # VoiceCommand 모듈에 ai_assistant 전달
 
-		app.setQuitOnLastWindowClosed(False)
+        main_window = MainWindow()
+        main_window.ai_assistant = ai_assistant  # MainWindow 인스턴스에 ai_assistant 할당
+        main_window.show()
 
-		icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
-		if not os.path.exists(icon_path):
-			logging.warning("아이콘 파일이 없습니다. 기본 아이콘을 사용합니다.")
-			icon_path = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            logging.error("시스템 트레이를 사용할 수 없습니다.")
+            sys.exit(1)
 
-		tray_icon = main_window.tray_icon
-		tts_thread = main_window.tts_thread
+        app.setQuitOnLastWindowClosed(False)
 
-		# AI 어시스턴트 초기화
-		try:
-			ai_assistant = get_ai_assistant()
-			set_ai_assistant(ai_assistant)  # VoiceCommand 모듈에 ai_assistant 전달
-		except Exception as e:
-			logging.error(f"AI 어시스턴트 초기화 실패: {str(e)}")
-			sys.exit(1)
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+        if not os.path.exists(icon_path):
+            logging.warning("아이콘 파일이 없습니다. 기본 아이콘을 사용합니다.")
+            icon_path = None
 
-		# 마이크 설정 변경 시 음성 인식 스레드에 알림
-		def update_microphone():
-			selected_microphone = main_window.microphone_combo.currentText()
-			main_window.voice_thread.set_microphone(selected_microphone)
+        tray_icon = main_window.tray_icon
+        tts_thread = main_window.tts_thread
 
-		main_window.save_button.clicked.connect(update_microphone)
+        # 마이크 설정 변경 시 음성 인식 스레드에 알림
+        def update_microphone():
+            selected_microphone = main_window.microphone_combo.currentText()
+            main_window.voice_thread.set_microphone(selected_microphone)
 
-		# 종료 시 정리
-		app.aboutToQuit.connect(main_window.voice_thread.stop)
-		app.aboutToQuit.connect(main_window.voice_thread.wait)
-		app.aboutToQuit.connect(lambda: main_window.tts_thread.queue.put(None))
-		app.aboutToQuit.connect(lambda: main_window.command_thread.queue.put(None))
-		app.aboutToQuit.connect(main_window.tts_thread.wait)
-		app.aboutToQuit.connect(main_window.command_thread.wait)
-		app.aboutToQuit.connect(main_window.tray_icon.exit)
-		app.aboutToQuit.connect(main_window.resource_monitor.stop)
-		app.aboutToQuit.connect(main_window.resource_monitor.wait)
+        main_window.save_button.clicked.connect(update_microphone)
 
-		sys.exit(app.exec())
-	except Exception as e:
-		logging.error(f"예외 발생: {str(e)}", exc_info=True)
-		sys.exit(1)
+        # 종료 시 정리
+        app.aboutToQuit.connect(main_window.voice_thread.stop)
+        app.aboutToQuit.connect(main_window.voice_thread.wait)
+        app.aboutToQuit.connect(lambda: main_window.tts_thread.queue.put(None))
+        app.aboutToQuit.connect(lambda: main_window.command_thread.queue.put(None))
+        app.aboutToQuit.connect(main_window.tts_thread.wait)
+        app.aboutToQuit.connect(main_window.command_thread.wait)
+        app.aboutToQuit.connect(main_window.tray_icon.exit)
+        app.aboutToQuit.connect(main_window.resource_monitor.stop)
+        app.aboutToQuit.connect(main_window.resource_monitor.wait)
+
+        sys.exit(app.exec())
+    except Exception as e:
+        logging.error(f"예외 발생: {str(e)}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
