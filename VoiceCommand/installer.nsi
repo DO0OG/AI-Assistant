@@ -2,9 +2,9 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 
-Name "VoiceCommand Installer"
-OutFile "VoiceCommandSetup.exe"
-InstallDir "$PROGRAMFILES\VoiceCommand"
+Name "Ari Voice Command Installer"
+OutFile "AriVoiceCommandSetup.exe"
+InstallDir "$PROGRAMFILES\Ari Voice Command"
 
 !define MUI_ABORTWARNING
 !define MUI_ICON "icon.ico"
@@ -49,7 +49,7 @@ Section "Install Dependencies" SEC_DEPENDENCIES
   ${EndIf}
 SectionEnd
 
-Section "VoiceCommand" SEC_VOICECOMMAND
+Section "Ari Voice Command" SEC_VOICECOMMAND
   SetOutPath $INSTDIR
   File "Ari.exe"
   File "Ari.bat"
@@ -64,14 +64,12 @@ Section "VoiceCommand" SEC_VOICECOMMAND
   File "아리야아_ko_windows_v3_0_0.ppn"
   File "porcupine_params_ko.pv"
   File /r "images"
-  CreateDirectory "$INSTDIR\models"
-  Inetc::get "https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M/resolve/main/llama-3-Korean-Bllossom-8B-Q4_K_M.gguf?download=true" "$INSTDIR\models\llama-3-Korean-Bllossom-8B-Q4_K_M.gguf"
-
+  
   CreateShortCut "$DESKTOP\Ari.lnk" "$INSTDIR\Ari.exe" "" "$INSTDIR\icon.ico"
   CreateDirectory "$SMPROGRAMS\VoiceCommand"
   CreateShortCut "$SMPROGRAMS\VoiceCommand\Ari.lnk" "$INSTDIR\Ari.exe" "" "$INSTDIR\icon.ico"
 
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceCommand" "DisplayName" "VoiceCommand"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceCommand" "DisplayName" "Ari Voice Command"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceCommand" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceCommand" "NoModify" 1
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceCommand" "NoRepair" 1
@@ -95,7 +93,7 @@ Section "Uninstall"
   Delete "$INSTDIR\install_dependencies.py"
   RMDir /r "$INSTDIR\logs"
   RMDir /r "$INSTDIR\images"
-  RMDir /r "$INSTDIR\models"
+  RMDir /r "$INSTDIR\saved_model"
   Delete "$INSTDIR\requirements.txt"
   RMDir /r "$INSTDIR\__pycache__"
   Delete "$INSTDIR\uninstall.exe"
