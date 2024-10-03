@@ -55,13 +55,13 @@
 
 ### 기타 명령어
 
+- **학습 모드 활성화** 또는 **학습 모드 시작**: AI의 응답을 학습시킵니다.
+
+- **학습 모드 비활성화** 또는 **학습 모드 종료**: AI의 응답 학습을 종료합니다.
+
 - 위 명령어들 외의 질문이나 요청은 AI 어시스턴트가 처리하여 응답합니다.
 
 ## 설정
-
-### AI 모델
-- 기본적으로 AI 모델은 설치 과정에서 [Bllossom](https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M)을 다운로드 합니다.
-- 다른 모델을 사용하길 원하면 사용자가 [HuggingFace](https://huggingface.co/)에서 gguf 모델을 받아 `models` 폴더에 넣어 사용해야 합니다.
 
 ### 캐릭터 위젯
 - 캐릭터 위젯은 images 폴더 속 각각의 양식에 따라 수정하여 사용자가 커스터마이징 할 수 있습니다.
@@ -75,6 +75,7 @@
 - [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
 - PySide6
 - torch
+- tensorflow
 - pvporcupine
 - pyaudio
 - requests
