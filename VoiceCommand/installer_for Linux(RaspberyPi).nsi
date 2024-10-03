@@ -66,7 +66,6 @@ Section "VoiceCommand" SEC_VOICECOMMAND
   File "porcupine_params_ko.pv"
   File /r "images"
   CreateDirectory "$INSTDIR\models"
-  Inetc::get "https://huggingface.co/MLP-KTLim/llama-3-Korean-Bllossom-8B-gguf-Q4_K_M/resolve/main/llama-3-Korean-Bllossom-8B-Q4_K_M.gguf?download=true" "$INSTDIR\models\llama-3-Korean-Bllossom-8B-Q4_K_M.gguf"
 
   CreateShortCut "$DESKTOP\Ari.lnk" "$INSTDIR\Ari.exe" "" "$INSTDIR\icon.ico"
   CreateDirectory "$SMPROGRAMS\VoiceCommand"
