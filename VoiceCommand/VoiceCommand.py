@@ -392,11 +392,20 @@ def convert_coord(lat, lon):
 
 
 def execute_command(command):
-    global ai_assistant
+    global learning_mode
     logging.info(f"실행할 명령: {command}")
 
+    if "학습 모드" in command:
+        if "비활성화" in command or "종료" in command:
+            learning_mode = False
+            text_to_speech("학습 모드가 비활성화되었습니다.")
+        elif "활성화" in command or "시작" in command:
+            learning_mode = True
+            text_to_speech("학습 모드가 활성화되었습니다.")
+        return
+
     # 사이트 이름을 매핑하는 사전
-    site_mapping = {"네이버": "naver", "유튜브": "youtube"}
+    site_mapping = {"네이버": "naver", "유튜브": "youtube", "구글": "google"}
 
     if "열어 줘" in command:
         site = command.split("열어 줘")[0].strip()
@@ -457,22 +466,74 @@ def execute_command(command):
             logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
             text_to_speech("날씨 정보를 가져오는 데 실패했습니다.")
     else:
-        if ai_assistant:
-            response = ai_assistant.process_query(command)
-            text_to_speech(response)
+        response, entities, sentiment = ai_assistant.process_query(command)
+        text_to_speech(response)
+        logging.info(f"인식된 개체: {entities}")
+        logging.info(f"감성 분석 결과: {sentiment}")
 
-            # 응답의 적절성 확인
-            text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
-            feedback = get_voice_feedback()
+        if learning_mode:
+            text_to_speech("응답이 적절했나요? '적절' 또는 '부적절'로 대답해주세요.")
+            feedback = listen_for_feedback()
 
-            if feedback == "예":
-                ai_assistant.learn_from_interaction(True)
-            elif feedback == "아니오":
-                ai_assistant.learn_from_interaction(False)
+            if "부적절" in feedback.lower():
+                text_to_speech("새로운 응답을 말씀해 주세요.")
+                new_response = listen_for_new_response()
+                if new_response:
+                    ai_assistant.learn_new_response(command, new_response)
+                    text_to_speech("새로운 응답을 학습했습니다. 감사합니다.")
+
+                    # 강화학습 업데이트
+                    ai_assistant.update_q_table(command, "say_sorry", -1, command)
+                else:
+                    text_to_speech("새로운 응답을 학습하지 못했습니다. 죄송합니다.")
             else:
-                text_to_speech("죄송합니다. 응답을 이해하지 못했습니다.")
-        else:
-            text_to_speech("AI 어시스턴트가 초기화되지 않았습니다.")
+                text_to_speech(
+                    "감사합니다. 앞으로도 좋은 답변을 드리도록 노력하겠습니다."
+                )
+
+                # 강화학습 업데이트
+                ai_assistant.update_q_table(command, "use_best_response", 1, command)
+
+
+def listen_for_feedback():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        logging.info("피드백 대기 중...")
+        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        audio = recognizer.listen(source, timeout=5, phrase_time_limit=3)
+
+    try:
+        feedback = recognizer.recognize_google(audio, language="ko-KR")
+        logging.info(f"인식된 피드백: {feedback}")
+        return feedback
+    except sr.UnknownValueError:
+        logging.warning("피드백을 인식하지 못했습니다.")
+        return "인식 실패"
+    except sr.RequestError as e:
+        logging.error(f"음성 인식 서비스 오류: {e}")
+        return "오류 발생"
+
+
+def listen_for_new_response():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        logging.info("새로운 응답 대기 중...")
+        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        audio = recognizer.listen(source, timeout=10, phrase_time_limit=10)
+
+    try:
+        new_response = recognizer.recognize_google(audio, language="ko-KR")
+        logging.info(f"인식된 새로운 응답: {new_response}")
+        return new_response
+    except sr.UnknownValueError:
+        text_to_speech("죄송합니다. 응답을 이해하지 못했습니다. 다시 말씀해 주세요.")
+        return listen_for_new_response()
+    except sr.RequestError as e:
+        logging.error(f"음성 인식 서비스 오류: {e}")
+        text_to_speech(
+            "음성 인식 서비스에 문제가 발생했습니다. 나중에 다시 시도해 주세요."
+        )
+        return None
 
 
 def get_voice_feedback():
