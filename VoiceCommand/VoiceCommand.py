@@ -16,6 +16,8 @@ import speech_recognition as sr
 import torch
 import pyaudio
 import sounddevice as sd
+import subprocess
+import pulsectl
 import numpy as np
 import threading
 from datetime import datetime, timedelta
@@ -430,16 +432,16 @@ def execute_command(command):
         text_to_speech(f"{site}에 대한 검색 결과입니다.")
         search_and_play_youtube(query, play="재생" in command)
     elif "볼륨 키우기" in command or "볼륨 올려" in command:
-        adjust_volume(0.1)
+        adjust_volume(0.1)  # 10% 증가
         text_to_speech("볼륨을 높였습니다.")
     elif "볼륨 줄이기" in command or "볼륨 내려" in command:
-        adjust_volume(-0.1)
+        adjust_volume(-0.1)  # 10% 감소
         text_to_speech("볼륨을 낮췄습니다.")
     elif "음소거 해제" in command:
-        adjust_volume(0)  # 음소거 해제를 위해 현재 볼륨을 유지
+        adjust_volume(0)  # 현재 볼륨 유지
         text_to_speech("음소거가 해제되었습니다.")
     elif "음소거" in command:
-        adjust_volume(-1)  # 음소거를 위해 볼륨을 0으로 설정
+        adjust_volume(-1)  # 볼륨을 0으로 설정
         text_to_speech("음소거 되었습니다.")
     elif "타이머" in command:
         if "취소" in command or "끄기" in command or "중지" in command:
@@ -566,13 +568,25 @@ def get_current_time():
 
 def adjust_volume(change):
     try:
-        import alsaaudio
-
-        mixer = alsaaudio.Mixer()
-        current_volume = mixer.getvolume()[0]
-        new_volume = max(0, min(100, current_volume + int(change * 100)))
-        mixer.setvolume(new_volume)
-        logging.info(f"볼륨이 {new_volume}로 조정되었습니다.")
+        with pulsectl.Pulse('volume-adjuster') as pulse:
+            sinks = pulse.sink_list()
+            if sinks:  # 기본 출력 장치 선택
+                default_sink = sinks[0]
+                volume = default_sink.volume
+                
+                # 현재 볼륨 가져오기 (모든 채널의 평균)
+                current_volume = sum(volume.values) / len(volume.values)
+                
+                # 새 볼륨 계산 (0.0 ~ 1.0 범위)
+                new_volume = max(0.0, min(1.0, current_volume + change))
+                
+                # 모든 채널에 새 볼륨 적용
+                volume.value_flat = new_volume
+                
+                # 볼륨 설정 적용
+                pulse.volume_set(default_sink, volume)
+                
+                logging.info(f"볼륨이 {new_volume:.2f}로 조정되었습니다.")
     except Exception as e:
         logging.error(f"볼륨 조절 실패: {str(e)}")
 
@@ -670,6 +684,7 @@ class VoiceRecognitionThread(QThread):
     def __init__(self):
         super().__init__()
         self.running = True
+        self.selected_microphone = None
         self.porcupine = None
         self.audio_stream = None
         self.access_key = use_api("picovoice_access_key")
@@ -684,49 +699,112 @@ class VoiceRecognitionThread(QThread):
         self.is_processing = False
         self.is_tts_playing = False
 
-        # Vosk 모델 초기화 추가
-        self.vosk_model_path = os.path.join(current_dir, "vosk-model-ko-0.22")
-        self.vosk_recognizer = VoskRecognizer(self.vosk_model_path)
+    def init_microphone(self):
+        if self.selected_microphone:
+            self.init_audio()
+        else:
+            logging.warning("선택된 마이크가 없습니다.")
+
+    def init_audio(self):
+        logging.info("PipeWire 오디오 초기화 중...")
+        
+        devices = sd.query_devices()
+        input_devices = [d for d in devices if d['max_input_channels'] > 0]
+        
+        if not input_devices:
+            logging.warning("입력 장치를 찾을 수 없습니다. 기본 장치를 사용합니다.")
+            self.audio_stream = sd.InputStream(
+                samplerate=16000,
+                channels=1,
+                dtype=np.int16,
+                blocksize=512
+            )
+        else:
+            device_index = None
+            for i, device in enumerate(input_devices):
+                if self.selected_microphone and self.selected_microphone in device['name']:
+                    device_index = i
+                    break
+            
+            if device_index is not None:
+                self.audio_stream = sd.InputStream(
+                    samplerate=16000,
+                    channels=1,
+                    dtype=np.int16,
+                    blocksize=512,
+                    device=device_index
+                )
+            else:
+                logging.warning(f"선택한 마이크 '{self.selected_microphone}'를 찾을 수 없습니다. 기본 장치를 사용합니다.")
+                self.audio_stream = sd.InputStream(
+                    samplerate=16000,
+                    channels=1,
+                    dtype=np.int16,
+                    blocksize=512
+                )
+        
+        logging.info("PipeWire 오디오 초기화 완료")
+
+    def get_pipewire_devices(self):
+        try:
+            result = subprocess.run(['pw-cli', 'list-objects'], capture_output=True, text=True)
+            devices = []
+            current_device = {}
+            for line in result.stdout.split('\n'):
+                if 'type PipeWire:Interface:Node' in line:
+                    if current_device:
+                        devices.append(current_device)
+                    current_device = {}
+                elif 'node.name =' in line:
+                    current_device['name'] = line.split('=')[1].strip().strip('"')
+                elif 'node.nick =' in line:
+                    current_device['nick'] = line.split('=')[1].strip().strip('"')
+                elif 'media.class =' in line and 'Audio/Source' in line:
+                    current_device['is_input'] = True
+            if current_device:
+                devices.append(current_device)
+            
+            input_devices = [f"{d['nick']} ({d['name']})" for d in devices if d.get('is_input')]
+            return input_devices
+        except Exception as e:
+            logging.error(f"PipeWire 장치 목록 가져오기 실패: {str(e)}")
+            return []
+
+    def set_microphone(self, microphone):
+        if self.selected_microphone != microphone:
+            self.selected_microphone = microphone
+            if hasattr(self, "audio_stream") and self.audio_stream:
+                self.audio_stream.close()
+            self.init_audio()
 
     def run(self):
         try:
             self.init_porcupine()
             self.init_audio()
 
-            while self.running:
-                pcm = self.audio_stream.read(
-                    self.porcupine.frame_length, exception_on_overflow=False
-                )
-                pcm = np.frombuffer(pcm, dtype=np.int16)
+            with self.audio_stream:
+                while self.running:
+                    pcm, overflowed = self.audio_stream.read(self.porcupine.frame_length)
+                    pcm = np.frombuffer(pcm, dtype=np.int16)
 
-                keyword_index = self.porcupine.process(pcm)
-                if keyword_index >= 0:
-                    self.handle_wake_word()
+                    keyword_index = self.porcupine.process(pcm)
+                    if keyword_index >= 0:
+                        self.handle_wake_word()
 
-                # Vosk를 사용한 음성 인식 추가
-                if (
-                    self.is_listening
-                    and not self.is_processing
-                    and not self.is_tts_playing
-                ):
-                    try:
-                        self.is_processing = True
-                        pcm = self.audio_stream.read(
-                            self.porcupine.frame_length, exception_on_overflow=False
-                        )
-                        pcm = np.frombuffer(pcm, dtype=np.int16)
-
-                        # Vosk로 음성 인식
-                        if self.recognizer.AcceptWaveform(pcm.tobytes()):
-                            result = self.recognizer.Result()
-                            vosk_result = json.loads(result)["text"]
-                            if vosk_result:
-                                logging.info(f"Vosk 인식 결과: {vosk_result}")
-                                self.result.emit(vosk_result)
-                    except Exception as e:
-                        logging.error(f"Vosk 음성 인식 중 오류 발생: {str(e)}")
-                    finally:
-                        self.is_processing = False
+                    # Vosk를 사용한 음성 인식 추가
+                    if self.is_listening and not self.is_processing and not self.is_tts_playing:
+                        try:
+                            self.is_processing = True
+                            if self.recognizer.AcceptWaveform(pcm.tobytes()):
+                                result = self.recognizer.Result()
+                                vosk_result = json.loads(result)["text"]
+                                if vosk_result:
+                                    logging.info(f"Vosk 인식 결과: {vosk_result}")
+                                    self.result.emit(vosk_result)
+                        except Exception as e:
+                            logging.error(f"Vosk 음성 인식 중 오류 발생: {str(e)}")
+                        finally:
+                            self.is_processing = False
 
         except Exception as e:
             logging.error(f"오류 발생: {str(e)}", exc_info=True)
@@ -743,36 +821,6 @@ class VoiceRecognitionThread(QThread):
         )
         logging.info("Porcupine 초기화 완료")
 
-    def init_audio(self):
-        logging.info("오디오 초기화 중...")
-        p = pyaudio.PyAudio()
-
-        # ALSA 장치 찾기
-        alsa_device_index = None
-        for i in range(p.get_device_count()):
-            dev_info = p.get_device_info_by_index(i)
-            if "sysdefault" in dev_info["name"].lower():
-                alsa_device_index = i
-                break
-
-        if alsa_device_index is None:
-            logging.warning(
-                "ALSA 기본 장치를 찾을 수 없습니다. 시스템 기본 장치를 사용합니다."
-            )
-            alsa_device_index = p.get_default_input_device_info()["index"]
-
-        logging.info(f"선택된 ALSA 장치 인덱스: {alsa_device_index}")
-
-        self.audio_stream = p.open(
-            rate=self.porcupine.sample_rate,
-            channels=1,
-            format=pyaudio.paInt16,
-            input=True,
-            frames_per_buffer=self.porcupine.frame_length,
-            input_device_index=alsa_device_index,
-        )
-        logging.info("오디오 초기화 완료")
-
     def handle_wake_word(self):
         logging.info("웨이크 워드 '아리야' 감지!")
         wake_responses = ["네?", "부르셨나요?"]
@@ -785,7 +833,6 @@ class VoiceRecognitionThread(QThread):
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
         if hasattr(self, "audio_stream") and self.audio_stream:
-            self.audio_stream.stop_stream()
             self.audio_stream.close()
         if self.porcupine is not None:
             self.porcupine.delete()

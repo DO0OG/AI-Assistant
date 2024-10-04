@@ -158,8 +158,13 @@ class MainWindow(QMainWindow):
             self.tray_icon = SystemTrayIcon(QIcon(), self)  # 빈 아이콘으로 생성
         self.tray_icon.show()
 
+        # voice_thread를 먼저 초기화
+        self.voice_thread = VoiceRecognitionThread()
+        self.tts_thread = TTSThread()
+        self.command_thread = CommandExecutionThread()
+
         self.initUI()
-        self.init_alsa_microphone()  # ALSA 마이크 초기화 추가
+        self.init_pipewire_microphone()  # PipeWire 마이크 초기화 추가
 
         self.model_loading_thread = ModelLoadingThread()
         self.model_loading_thread.finished.connect(self.on_model_loaded)
@@ -171,10 +176,6 @@ class MainWindow(QMainWindow):
         self.resource_monitor = ResourceMonitor()
         self.resource_monitor.gc_needed.connect(perform_gc)
         self.resource_monitor.start()
-
-        self.voice_thread = VoiceRecognitionThread()
-        self.tts_thread = TTSThread()
-        self.command_thread = CommandExecutionThread()
 
         self.voice_thread.result.connect(self.handle_voice_result)
 
@@ -196,34 +197,40 @@ class MainWindow(QMainWindow):
         self.microphone_combo = QComboBox(self)
         self.microphone_combo.setGeometry(100, 50, 180, 30)
         
-        # ALSA 마이크만 표시
-        alsa_devices = [device for device in sr.Microphone.list_microphone_names() if 'alsa' in device.lower()]
-        self.microphone_combo.addItems(alsa_devices)
+        # PipeWire 마이크 목록 가져오기
+        pipewire_devices = self.voice_thread.get_pipewire_devices()
+        self.microphone_combo.addItems(pipewire_devices)
         
-        # 첫 번째 ALSA 마이크 선택
-        if alsa_devices:
+        # 첫 번째 PipeWire 마이크 선택
+        if pipewire_devices:
             self.microphone_combo.setCurrentIndex(0)
+            self.voice_thread.set_microphone(pipewire_devices[0])
 
         self.save_button = QPushButton("저장", self)
         self.save_button.setGeometry(100, 100, 100, 30)
         self.save_button.clicked.connect(self.save_settings)
 
-    def init_alsa_microphone(self):
-        # ALSA 마이크 초기화
+        self.microphone_combo.currentIndexChanged.connect(self.update_microphone)
+
+    def init_pipewire_microphone(self):
         if self.microphone_combo.count() > 0:
             selected_microphone = self.microphone_combo.currentText()
             if hasattr(self, "voice_thread") and self.voice_thread:
-                self.voice_thread.selected_microphone = selected_microphone
-                self.voice_thread.init_microphone()
-            logging.info(f"ALSA 마이크 초기화: {selected_microphone}")
+                self.voice_thread.set_microphone(selected_microphone)
+            logging.info(f"PipeWire 마이크 초기화: {selected_microphone}")
+
+    def update_microphone(self):
+        selected_microphone = self.microphone_combo.currentText()
+        if hasattr(self, "voice_thread") and self.voice_thread:
+            self.voice_thread.set_microphone(selected_microphone)
+        logging.info(f"마이크 변경: {selected_microphone}")
 
     def save_settings(self):
         selected_microphone = self.microphone_combo.currentText()
         logging.info(f"선택된 마이크: {selected_microphone}")
         try:
             if hasattr(self, "voice_thread") and self.voice_thread:
-                self.voice_thread.selected_microphone = selected_microphone
-                self.voice_thread.init_microphone()
+                self.voice_thread.set_microphone(selected_microphone)
             self.hide()
             self.tray_icon.showMessage(
                 "Ari",
@@ -299,9 +306,6 @@ def main():
         main_window = MainWindow()
         main_window.ai_assistant = ai_assistant  # MainWindow 인스턴스에 ai_assistant 할당
         main_window.show()
-
-        # ALSA 마이크 초기화
-        main_window.init_alsa_microphone()
 
         if not QSystemTrayIcon.isSystemTrayAvailable():
             logging.error("시스템 트레이를 사용할 수 없습니다.")
