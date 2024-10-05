@@ -845,17 +845,6 @@ class VoiceRecognitionThread(QThread):
             response = ai_assistant.process_query(text)
             text_to_speech(response)
 
-            # 응답의 적절성 확인
-            text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
-            feedback = self.get_voice_feedback()
-
-            if feedback == "예":
-                ai_assistant.learn_from_interaction(True)
-            elif feedback == "아니오":
-                ai_assistant.learn_from_interaction(False)
-            else:
-                text_to_speech("죄송합니다. 응답을 이해하지 못했습니다.")
-
         except sr.UnknownValueError:
             logging.warning("음성을 인식할 수 없습니다.")
         except sr.RequestError as e:
@@ -864,7 +853,6 @@ class VoiceRecognitionThread(QThread):
             logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
 
     def get_voice_feedback(self):
-        # 이 메서드의 구현이 필요합니다
         pass
 
     def stop(self):
