@@ -538,23 +538,6 @@ def listen_for_new_response():
         return None
 
 
-def get_voice_feedback():
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("피드백을 말씀해주세요...")
-        audio = r.listen(source, timeout=5, phrase_time_limit=3)
-
-    try:
-        feedback = r.recognize_google(audio, language="ko-KR")
-        return feedback.lower()
-    except sr.UnknownValueError:
-        print("음성을 인식할 수 없습니다.")
-        return None
-    except sr.RequestError as e:
-        print(f"음성 인식 서비스 오류: {e}")
-        return None
-
-
 def get_current_time():
     now = datetime.now()
     if now.hour < 12:
@@ -685,6 +668,7 @@ class VoiceRecognitionThread(QThread):
         super().__init__()
         self.running = True
         self.selected_microphone = None
+        self.microphone_index = None
         self.porcupine = None
         self.audio_stream = None
         self.access_key = use_api("picovoice_access_key")
@@ -773,9 +757,17 @@ class VoiceRecognitionThread(QThread):
     def set_microphone(self, microphone):
         if self.selected_microphone != microphone:
             self.selected_microphone = microphone
+            self.microphone_index = self.get_microphone_index(microphone)
             if hasattr(self, "audio_stream") and self.audio_stream:
                 self.audio_stream.close()
             self.init_audio()
+
+    def get_microphone_index(self, microphone_name):
+        import speech_recognition as sr
+        for index, name in enumerate(sr.Microphone.list_microphone_names()):
+            if microphone_name in name:
+                return index
+        return None
 
     def run(self):
         try:
@@ -855,7 +847,7 @@ class VoiceRecognitionThread(QThread):
 
             # 응답의 적절성 확인
             text_to_speech("응답이 적절했나요? 예 또는 아니오로 대답해주세요.")
-            feedback = get_voice_feedback()
+            feedback = self.get_voice_feedback()
 
             if feedback == "예":
                 ai_assistant.learn_from_interaction(True)
@@ -870,6 +862,10 @@ class VoiceRecognitionThread(QThread):
             logging.error(f"음성 인식 서비스 오류: {e}")
         except Exception as e:
             logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
+
+    def get_voice_feedback(self):
+        # 이 메서드의 구현이 필요합니다
+        pass
 
     def stop(self):
         self.running = False
