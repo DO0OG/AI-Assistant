@@ -71,8 +71,7 @@
 ## 의존성
 - Python 3.11+
 - [whisper](https://github.com/openai/whisper)
-- [MeloTTS](https://github.com/myshell-ai/MeloTTS)
-- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
+- [MeloTTS](https://github.com/myshell-ai/MeloTTS)(Windows)
 - PySide6
 - torch
 - tensorflow
