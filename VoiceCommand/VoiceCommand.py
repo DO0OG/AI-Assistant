@@ -124,10 +124,6 @@ def text_to_speech(text):
         ):
             main_window.voice_thread.is_tts_playing = True
 
-        # 말풍선 표시
-        if main_window:
-            main_window.show_speech_bubble(text)
-
         # pydub를 사용하여 오디오 재생
         sound = AudioSegment.from_file(output_path)
         play(sound)
@@ -140,10 +136,6 @@ def text_to_speech(text):
             and main_window.voice_thread
         ):
             main_window.voice_thread.is_tts_playing = False
-
-        # 말풍선 숨기기
-        if main_window:
-            main_window.hide_speech_bubble()
 
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
