@@ -5,8 +5,9 @@ import time
 import logging
 from urllib.parse import quote_plus
 from selenium import webdriver
-from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -26,22 +27,25 @@ import requests
 import math
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QThread, Signal
-from melo.api import TTS
 from pydub import AudioSegment
 from pydub.playback import play
 from Config import use_api
 import pvporcupine
 from vosk import Model, KaldiRecognizer
 import json
+import asyncio
+from edge_tts import Communicate
+from pydub import AudioSegment
+from pydub.playback import play
+import io
 
 # 전역 변수 선언
-tts_model = None
-speaker_ids = None
 ai_assistant = None
 icon_path = None
 pulse = None
 active_timer = None
 active_shutdown_timer = None
+learning_mode = False
 
 
 def set_ai_assistant(assistant):
@@ -51,26 +55,6 @@ def set_ai_assistant(assistant):
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-# 모델 로딩 스레드
-class ModelLoadingThread(QThread):
-    finished = Signal()
-    progress = Signal(str)
-
-    def run(self):
-        global tts_model, speaker_ids
-        try:
-            self.progress.emit("TTS 모델 로딩 중...")
-            with torch.no_grad():
-                tts_model = TTS(language="KR", device=device)
-                speaker_ids = tts_model.hps.data.spk2id
-
-            logging.info("TTS 모델 로딩 완료. " + device)
-        except Exception as e:
-            logging.error(f"모델 로딩 중 오류 발생: {str(e)}")
-        finally:
-            self.finished.emit()
 
 
 class VoskRecognizer:
@@ -102,15 +86,13 @@ class VoskRecognizer:
         self.mic.terminate()
 
 
-def text_to_speech(text):
-    global tts_model, speaker_ids, tts_thread
-    if tts_model is None or speaker_ids is None:
-        logging.error("TTS 모델이 초기화되지 않았습니다.")
-        return
-
+async def text_to_speech(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0%"):
     try:
-        output_path = os.path.abspath("response.wav")
-        tts_model.tts_to_file(text, speaker_ids["KR"], output_path, speed=1.0)
+        communicate = Communicate(text, voice, rate=rate, volume=volume)
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
 
         # TTS 재생 전에 음성 인식을 비활성화
         app = QApplication.instance()
@@ -124,10 +106,9 @@ def text_to_speech(text):
         ):
             main_window.voice_thread.is_tts_playing = True
 
-        # pydub를 사용하여 오디오 재생
-        sound = AudioSegment.from_file(output_path)
-        play(sound)
-        os.remove(output_path)  # 오디오 파일 삭제
+        # 오디오 재생 (MP3 형식으로 처리)
+        audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
+        play(audio)
 
         # TTS 재생 후에 음성 인식을 다시 활성화
         if (
@@ -141,6 +122,12 @@ def text_to_speech(text):
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
 
+def tts_wrapper(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0%"):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(text_to_speech(text, voice, rate, volume))
+
+
 def shutdown_computer():
     os.system("sudo shutdown -h now")
 
@@ -150,13 +137,13 @@ def cancel_timer():
     if active_timer:
         active_timer["timer"].cancel()
         active_timer = None
-        text_to_speech("타이머가 취소되었습니다.")
+        tts_wrapper("타이머가 취소되었습니다.")
     if active_shutdown_timer:
         active_shutdown_timer["timer"].cancel()
         active_shutdown_timer = None
-        text_to_speech("컴퓨터 종료 타이머가 취소되었습니다.")
+        tts_wrapper("컴퓨터 종료 타이머가 취소되었습니다.")
     if not active_timer and not active_shutdown_timer:
-        text_to_speech("현재 실행 중인 타이머가 없습니다.")
+        tts_wrapper("현재 실행 중인 타이머가 없습니다.")
 
 
 def set_timer(minutes):
@@ -165,7 +152,7 @@ def set_timer(minutes):
     def timer_thread():
         global active_timer
         if active_timer and datetime.now() >= active_timer["end_time"]:
-            text_to_speech(f"{minutes}분 타이머가 완료되었습니다.")
+            tts_wrapper(f"{minutes}분 타이머가 완료되었습니다.")
             active_timer = None
         elif active_timer:
             # 1초마다 확인하도록 새로운 타이머 설정
@@ -177,7 +164,7 @@ def set_timer(minutes):
     end_time = datetime.now() + timedelta(minutes=minutes)
     active_timer = {"timer": threading.Timer(1, timer_thread), "end_time": end_time}
     active_timer["timer"].start()
-    text_to_speech(f"{minutes}분 타이머를 설정했습니다.")
+    tts_wrapper(f"{minutes}분 타이머를 설정했습니다.")
 
 
 def set_shutdown_timer(minutes):
@@ -189,7 +176,7 @@ def set_shutdown_timer(minutes):
             active_shutdown_timer
             and datetime.now() >= active_shutdown_timer["end_time"]
         ):
-            text_to_speech(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
+            tts_wrapper(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
             shutdown_computer()
             active_shutdown_timer = None
         elif active_shutdown_timer:
@@ -205,7 +192,7 @@ def set_shutdown_timer(minutes):
         "end_time": end_time,
     }
     active_shutdown_timer["timer"].start()
-    text_to_speech(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
+    tts_wrapper(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
 
 
 def open_website(url):
@@ -218,9 +205,10 @@ def search_and_play_youtube(query, play=True):
     try:
         options = Options()
         options.add_argument("--headless")
-        driver = webdriver.Firefox(
-            service=Service(GeckoDriverManager().install()), options=options
-        )
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
         driver.get(search_url)
         time.sleep(2)  # 페이지 로딩을 위해 잠시 대기
@@ -235,15 +223,15 @@ def search_and_play_youtube(query, play=True):
 
         if play == True:
             webbrowser.open(first_video_link)
-            text_to_speech(f"{query}에 대한 첫 번째 유튜브 영상을 열었습니다.")
+            tts_wrapper(f"{query}에 대한 첫 번째 유튜브 영상을 열었습니다.")
             logging.info(f"유튜브 영상 열기: {first_video_link}")
         else:
             webbrowser.open(search_url)
-            text_to_speech(f"{query}에 대한 유튜브 검색 결과를 열었습니다.")
+            tts_wrapper(f"{query}에 대한 유튜브 검색 결과를 열었습니다.")
             logging.info(f"유튜브 검색 결과 열기: {search_url}")
     except Exception as e:
         logging.error(f"유튜브 검색 중 오류 발생: {str(e)}")
-        text_to_speech("유튜브 검색 중 오류가 발생했습니다.")
+        tts_wrapper("유튜브 검색 중 오류가 발생했습니다.")
         webbrowser.open(search_url)
 
 
@@ -392,10 +380,10 @@ def execute_command(command):
     if "학습 모드" in command:
         if "비활성화" in command or "종료" in command:
             learning_mode = False
-            text_to_speech("학습 모드가 비활성화되었습니다.")
+            tts_wrapper("학습 모드가 비활성화되었습니다.")
         elif "활성화" in command or "시작" in command:
             learning_mode = True
-            text_to_speech("학습 모드가 활성화되었습니다.")
+            tts_wrapper("학습 모드가 활성화되었습니다.")
         return
 
     # 사이트 이름을 매핑하는 사전
@@ -410,7 +398,7 @@ def execute_command(command):
         open_website(
             f"https://www.{site_key}.com" if site_key else "https://www.google.com"
         )
-        text_to_speech("브라우저를 열었습니다.")
+        tts_wrapper("브라우저를 열었습니다.")
     elif "유튜브" in command and ("재생" in command or "검색" in command):
         query = (
             command.split("유튜브")[1]
@@ -421,20 +409,20 @@ def execute_command(command):
     elif "검색해 줘" in command:
         site = command.split("검색해 줘")[0].strip()
         open_website(f"https://www.google.com/search?q={site}")
-        text_to_speech(f"{site}에 대한 검색 결과입니다.")
+        tts_wrapper(f"{site}에 대한 검색 결과입니다.")
         search_and_play_youtube(query, play="재생" in command)
     elif "볼륨 키우기" in command or "볼륨 올려" in command:
         adjust_volume(0.1)  # 10% 증가
-        text_to_speech("볼륨을 높였습니다.")
+        tts_wrapper("볼륨을 높였습니다.")
     elif "볼륨 줄이기" in command or "볼륨 내려" in command:
         adjust_volume(-0.1)  # 10% 감소
-        text_to_speech("볼륨을 낮췄습니다.")
+        tts_wrapper("볼륨을 낮췄습니다.")
     elif "음소거 해제" in command:
         adjust_volume(0)  # 현재 볼륨 유지
-        text_to_speech("음소거가 해제되었습니다.")
+        tts_wrapper("음소거가 해제되었습니다.")
     elif "음소거" in command:
         adjust_volume(-1)  # 볼륨을 0으로 설정
-        text_to_speech("음소거 되었습니다.")
+        tts_wrapper("음소거 되었습니다.")
     elif "타이머" in command:
         if "취소" in command or "끄기" in command or "중지" in command:
             cancel_timer()
@@ -443,45 +431,45 @@ def execute_command(command):
     elif "몇 시야" in command:
         current_time = get_current_time()
         response = f"현재 시간은 {current_time}입니다."
-        text_to_speech(response)
+        tts_wrapper(response)
         logging.info(f"현재 시간 안내: {response}")
     elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
         set_shutdown_timer_from_command(command)
     elif "전원 꺼 줘" in command or "컴퓨터 꺼 줘" in command:
-        text_to_speech("컴퓨터를 종료합니다.")
+        tts_wrapper("컴퓨터를 종료합니다.")
         shutdown_computer()
     elif "날씨 어때" in command:
         try:
             lat, lon = get_current_location()
             logging.info(f"현재 위치: 위도 {lat}, 경도 {lon}")
             weather_info = get_weather_info(lat, lon)
-            text_to_speech(weather_info)
+            tts_wrapper(weather_info)
         except Exception as e:
             logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
-            text_to_speech("날씨 정보를 가져오는 데 실패했습니다.")
+            tts_wrapper("날씨 정보를 가져오는 데 실패했습니다.")
     else:
         response, entities, sentiment = ai_assistant.process_query(command)
-        text_to_speech(response)
+        tts_wrapper(response)
         logging.info(f"인식된 개체: {entities}")
         logging.info(f"감성 분석 결과: {sentiment}")
 
         if learning_mode:
-            text_to_speech("응답이 적절했나요? '적절' 또는 '부적절'로 대답해주세요.")
+            tts_wrapper("응답이 적절했나요? '적절' 또는 '부적절'로 대답해주세요.")
             feedback = listen_for_feedback()
 
             if "부적절" in feedback.lower():
-                text_to_speech("새로운 응답을 말씀해 주세요.")
+                tts_wrapper("새로운 응답을 말씀해 주세요.")
                 new_response = listen_for_new_response()
                 if new_response:
                     ai_assistant.learn_new_response(command, new_response)
-                    text_to_speech("새로운 응답을 학습했습니다. 감사합니다.")
+                    tts_wrapper("새로운 응답을 학습했습니다. 감사합니다.")
 
                     # 강화학습 업데이트
                     ai_assistant.update_q_table(command, "say_sorry", -1, command)
                 else:
-                    text_to_speech("새로운 응답을 학습하지 못했습니다. 죄송합니다.")
+                    tts_wrapper("새로운 응답을 학습하지 못했습니다. 죄송합니다.")
             else:
-                text_to_speech(
+                tts_wrapper(
                     "감사합니다. 앞으로도 좋은 답변을 드리도록 노력하겠습니다."
                 )
 
@@ -520,11 +508,11 @@ def listen_for_new_response():
         logging.info(f"인식된 새로운 응답: {new_response}")
         return new_response
     except sr.UnknownValueError:
-        text_to_speech("죄송합니다. 응답을 이해하지 못했습니다. 다시 말씀해 주세요.")
+        tts_wrapper("죄송합니다. 응답을 이해하지 못했습니다. 다시 말씀해 주세요.")
         return listen_for_new_response()
     except sr.RequestError as e:
         logging.error(f"음성 인식 서비스 오류: {e}")
-        text_to_speech(
+        tts_wrapper(
             "음성 인식 서비스에 문제가 발생했습니다. 나중에 다시 시도해 주세요."
         )
         return None
@@ -571,7 +559,7 @@ def set_timer_from_command(command):
         minutes = int("".join(filter(str.isdigit, command)))
         set_timer(minutes)
     except ValueError:
-        text_to_speech("타이머 시간을 정확히 말씀해 주세요.")
+        tts_wrapper("타이머 시간을 정확히 말씀해 주세요.")
 
 
 def set_shutdown_timer_from_command(command):
@@ -579,7 +567,7 @@ def set_shutdown_timer_from_command(command):
         minutes = int("".join(filter(str.isdigit, command)))
         set_shutdown_timer(minutes)
     except ValueError:
-        text_to_speech("종료 시간을 정확히 말씀해 주세요.")
+        tts_wrapper("종료 시간을 정확히 말씀해 주세요.")
 
 
 class VoiceCommandThread(QThread):
@@ -675,6 +663,10 @@ class VoiceRecognitionThread(QThread):
         self.is_processing = False
         self.is_tts_playing = False
 
+        # 마이크 초기화
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone(device_index=self.microphone_index)
+
     def init_microphone(self):
         if self.selected_microphone:
             self.init_audio()
@@ -683,10 +675,10 @@ class VoiceRecognitionThread(QThread):
 
     def init_audio(self):
         logging.info("PipeWire 오디오 초기화 중...")
-        
+
         devices = sd.query_devices()
         input_devices = [d for d in devices if d['max_input_channels'] > 0]
-        
+
         if not input_devices:
             logging.warning("입력 장치를 찾을 수 없습니다. 기본 장치를 사용합니다.")
             self.audio_stream = sd.InputStream(
@@ -701,7 +693,7 @@ class VoiceRecognitionThread(QThread):
                 if self.selected_microphone and self.selected_microphone in device['name']:
                     device_index = i
                     break
-            
+
             if device_index is not None:
                 self.audio_stream = sd.InputStream(
                     samplerate=16000,
@@ -718,7 +710,7 @@ class VoiceRecognitionThread(QThread):
                     dtype=np.int16,
                     blocksize=512
                 )
-        
+
         logging.info("PipeWire 오디오 초기화 완료")
 
     def get_pipewire_devices(self):
@@ -739,7 +731,7 @@ class VoiceRecognitionThread(QThread):
                     current_device['is_input'] = True
             if current_device:
                 devices.append(current_device)
-            
+
             input_devices = [f"{d['nick']} ({d['name']})" for d in devices if d.get('is_input')]
             return input_devices
         except Exception as e:
@@ -809,10 +801,31 @@ class VoiceRecognitionThread(QThread):
         logging.info("웨이크 워드 '아리야' 감지!")
         wake_responses = ["네?", "부르셨나요?"]
         response = random.choice(wake_responses)
-        text_to_speech(response)
+        tts_wrapper(response)
         self.listening_state_changed.emit(True)
         self.recognize_speech()
         self.listening_state_changed.emit(False)
+
+    def recognize_speech(self):
+        try:
+            with self.microphone as source:
+                logging.info("말씀해 주세요...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                audio = self.recognizer.listen(source, timeout=1, phrase_time_limit=3)
+
+            text = self.recognizer.recognize_google(audio, language="ko-KR")
+            logging.info(f"인식된 텍스트: {text}")
+            self.result.emit(text)
+
+        except sr.UnknownValueError:
+            logging.warning("음성을 인식할 수 없습니다.")
+            tts_wrapper("죄송합니다. 말씀을 이해하지 못했습니다.")
+        except sr.RequestError as e:
+            logging.error(f"음성 인식 서비스 오류: {e}")
+            tts_wrapper("음성 인식 서비스에 문제가 발생했습니다.")
+        except Exception as e:
+            logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
+            tts_wrapper("죄송합니다. 오류가 발생했습니다.")
 
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
@@ -821,28 +834,6 @@ class VoiceRecognitionThread(QThread):
         if self.porcupine is not None:
             self.porcupine.delete()
         logging.info("음성 인식 스레드 종료 완료")
-
-    def recognize_speech(self):
-        r = sr.Recognizer()
-        try:
-            with sr.Microphone(device_index=self.microphone_index) as source:
-                logging.info("말씀해 주세요...")
-                audio = r.listen(source, timeout=5, phrase_time_limit=5)
-
-            text = r.recognize_google(audio, language="ko-KR")
-            logging.info(f"인식된 텍스트: {text}")
-            self.result.emit(text)
-
-            # AI 어시스턴트 응답 처리
-            response = ai_assistant.process_query(text)
-            text_to_speech(response)
-
-        except sr.UnknownValueError:
-            logging.warning("음성을 인식할 수 없습니다.")
-        except sr.RequestError as e:
-            logging.error(f"음성 인식 서비스 오류: {e}")
-        except Exception as e:
-            logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
 
     def get_voice_feedback(self):
         pass
@@ -857,13 +848,15 @@ class TTSThread(QThread):
     def __init__(self):
         super().__init__()
         self.queue = Queue()
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
 
     def run(self):
         while True:
             text = self.queue.get()
             if text is None:
                 break
-            text_to_speech(text)
+            self.loop.run_until_complete(text_to_speech(text))
             self.queue.task_done()
 
     def speak(self, text):
