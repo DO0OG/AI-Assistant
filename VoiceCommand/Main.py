@@ -13,9 +13,9 @@ from ai_assistant import AdvancedAIAssistant, get_ai_assistant
 from collections import deque
 from VoiceCommand import (
     VoiceRecognitionThread,
-    text_to_speech,
+    tts_wrapper,
     TTSThread,
-    ModelLoadingThread,
+    # ModelLoadingThread 제거
     CommandExecutionThread,
     set_ai_assistant,
 )
@@ -131,7 +131,6 @@ class AriCore(QObject):
         self.voice_thread = VoiceRecognitionThread()
         self.tts_thread = TTSThread()
         self.command_thread = CommandExecutionThread()
-        self.model_loading_thread = ModelLoadingThread()
         self.resource_monitor = ResourceMonitor()
 
         self.init_microphone()
@@ -143,12 +142,10 @@ class AriCore(QObject):
         self.voice_thread.start()
         self.tts_thread.start()
         self.command_thread.start()
-        self.model_loading_thread.start()
         self.resource_monitor.gc_needed.connect(perform_gc)
 
     def init_connections(self):
         self.voice_thread.result.connect(self.handle_voice_result)
-        self.model_loading_thread.finished.connect(self.on_model_loaded)
 
     def load_settings(self):
         try:
@@ -194,10 +191,7 @@ class AriCore(QObject):
     def handle_voice_result(self, text):
         logging.info(f"인식된 명령: {text}")
         self.command_thread.execute(text)
-
-    def on_model_loaded(self):
-        logging.info("모델 로딩이 완료되었습니다.")
-
+    
     def cleanup(self):
         self.voice_thread.stop()
         self.voice_thread.wait()
@@ -216,22 +210,8 @@ def main():
 
         app = QApplication(sys.argv)
 
-        model_path = "./saved_model"
-        if os.path.exists(model_path) and os.path.isfile(
-            os.path.join(model_path, "model_weights.pth")
-        ):
-            try:
-                logging.info("기존 모델을 로드합니다.")
-                ai_assistant = AdvancedAIAssistant.load_model(model_path)
-                logging.info("모델 로드 완료")
-            except Exception as e:
-                logging.error(f"모델 로드 중 오류 발생: {str(e)}")
-                logging.info("새로운 AI 어시스턴트를 초기화합니다.")
-                ai_assistant = get_ai_assistant()
-        else:
-            logging.info("저장된 모델이 없습니다. 새로운 AI 어시스턴트를 초기화합니다.")
-            ai_assistant = get_ai_assistant()
-
+        # AI 어시스턴트 초기화
+        ai_assistant = get_ai_assistant()
         set_ai_assistant(ai_assistant)
 
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -245,6 +225,8 @@ def main():
         tray_icon.show()
 
         ari_core = AriCore()
+
+        tts_wrapper("안녕하세요")
 
         app.aboutToQuit.connect(ari_core.cleanup)
 
