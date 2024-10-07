@@ -20,6 +20,13 @@ from VoiceCommand import (
     set_ai_assistant,
 )
 import json
+from LEDController import (
+    voice_recognition_start,
+    tts_start,
+    idle,
+    get_led_controller,
+    cleanup as led_cleanup,
+)
 
 # 전역 변수 선언
 tts_model = None
@@ -132,6 +139,9 @@ class AriCore(QObject):
         self.tts_thread = TTSThread()
         self.command_thread = CommandExecutionThread()
         self.resource_monitor = ResourceMonitor()
+        self.led_controller = get_led_controller()
+        idle()  # LED 상태를 ON으로 설정
+        logging.info("AriCore 초기화 완료, LED ON 상태로 설정")
 
         self.init_microphone()
         self.init_threads()
@@ -190,8 +200,10 @@ class AriCore(QObject):
 
     def handle_voice_result(self, text):
         logging.info(f"인식된 명령: {text}")
+        voice_recognition_start()  # 음성 인식 시작 시 LED 상태 변경
         self.command_thread.execute(text)
-    
+        idle()  # 음성 인식 종료 후 LED 상태를 기본으로 변경
+
     def cleanup(self):
         self.voice_thread.stop()
         self.voice_thread.wait()
@@ -200,10 +212,12 @@ class AriCore(QObject):
         self.tts_thread.wait()
         self.command_thread.wait()
         self.resource_monitor.stop()
+        led_cleanup()  # LED 정리
+        logging.info("AriCore 정리 완료")
 
 
 def main():
-    global ai_assistant, icon_path, tts_thread
+    global ai_assistant, icon_path
     try:
         setup_logging()
         logging.info("프로그램 시작")
@@ -214,27 +228,33 @@ def main():
         ai_assistant = get_ai_assistant()
         set_ai_assistant(ai_assistant)
 
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            logging.error("시스템 트레이를 사용할 수 없습니다.")
-            sys.exit(1)
-
-        app.setQuitOnLastWindowClosed(False)
-
-        icon = QIcon(icon_path) if icon_path else QIcon()
-        tray_icon = SystemTrayIcon(icon)
-        tray_icon.show()
+        use_system_tray = QSystemTrayIcon.isSystemTrayAvailable()
+        
+        if use_system_tray:
+            app.setQuitOnLastWindowClosed(False)
+            icon = QIcon(icon_path) if icon_path else QIcon()
+            tray_icon = SystemTrayIcon(icon)
+            tray_icon.show()
+        else:
+            logging.warning("시스템 트레이를 사용할 수 없습니다. 콘솔 모드로 실행합니다.")
 
         ari_core = AriCore()
 
+        idle()  # 프로그램 시작 시 LED 상태를 기본으로 설정
+
         tts_wrapper("안녕하세요")
 
-        app.aboutToQuit.connect(ari_core.cleanup)
+        # 메인 이벤트 루프 실행
+        while True:
+            app.processEvents()  # Qt 이벤트 처리
+            time.sleep(0.1)  # CPU 사용량을 줄이기 위한 짧은 대기
 
-        sys.exit(app.exec())
+    except KeyboardInterrupt:
+        logging.info("프로그램 종료")
     except Exception as e:
         logging.error(f"예외 발생: {str(e)}", exc_info=True)
-        sys.exit(1)
-
+    finally:
+        ari_core.cleanup()
 
 if __name__ == "__main__":
     main()
