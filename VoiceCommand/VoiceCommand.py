@@ -38,6 +38,9 @@ from edge_tts import Communicate
 from pydub import AudioSegment
 from pydub.playback import play
 import io
+import yt_dlp
+import vlc
+from LEDController import voice_recognition_start, tts_start, idle
 
 # 전역 변수 선언
 ai_assistant = None
@@ -46,6 +49,15 @@ pulse = None
 active_timer = None
 active_shutdown_timer = None
 learning_mode = False
+
+player = None
+stop_event = threading.Event()
+playlist = []
+current_track_index = 0
+paused = False
+current_url = None
+current_time = 0
+auto_play = True  # 자동 재생 플래그 추가
 
 
 def set_ai_assistant(assistant):
@@ -123,9 +135,11 @@ async def text_to_speech(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0
 
 
 def tts_wrapper(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0%"):
+    tts_start()  # TTS 시작 시 LED 상태 변경
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(text_to_speech(text, voice, rate, volume))
+    idle()  # TTS 종료 후 LED 상태를 기본으로 변경
 
 
 def shutdown_computer():
@@ -200,39 +214,160 @@ def open_website(url):
     logging.info(f"웹사이트 열기: {url}")
 
 
+def search_youtube(query):
+    search_url = f"https://www.youtube.com/results?search_query={query}"
+    response = requests.get(search_url)
+    
+    start = response.text.find('var ytInitialData = ') + len('var ytInitialData = ')
+    end = response.text.find(';</script>', start)
+    json_str = response.text[start:end]
+    data = json.loads(json_str)
+
+    videos = data['contents']['twoColumnSearchResultsRenderer']['primaryContents']['sectionListRenderer']['contents'][0]['itemSectionRenderer']['contents']
+    
+    results = []
+    for video in videos:
+        if 'videoRenderer' in video:
+            video_id = video['videoRenderer']['videoId']
+            title = video['videoRenderer']['title']['runs'][0]['text']
+            results.append((f"https://www.youtube.com/watch?v={video_id}", title))
+            if len(results) == 5:  # 상위 5개 결과만 가져옵니다
+                break
+    
+    return results
+
+def play_youtube_audio(url, start_time=0):
+    global player, stop_event, paused, current_url, current_time, auto_play
+    stop_event.clear()
+    paused = False
+    current_url = url
+    
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        audio_url = info['url']
+    
+    instance = vlc.Instance('--no-video')
+    player = instance.media_player_new()
+    media = instance.media_new(audio_url)
+    player.set_media(media)
+    player.play()
+    
+    player.set_time(int(start_time * 1000))
+    
+    while not stop_event.is_set():
+        state = player.get_state()
+        if state == vlc.State.Playing:
+            current_time = player.get_time() / 1000
+        if state == vlc.State.Ended:
+            break
+        time.sleep(1)
+    
+    if not stop_event.is_set() and not paused and auto_play:
+        play_next_track()
+
+
 def search_and_play_youtube(query, play=True):
-    search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+    global playlist, current_track_index, auto_play
     try:
-        options = Options()
-        options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-        driver.get(search_url)
-        time.sleep(2)  # 페이지 로딩을 위해 잠시 대기
-
-        # 동영상 링크 찾기
-        video_link = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a#video-title"))
-        )
-
-        first_video_link = video_link.get_attribute("href")
-        driver.quit()
-
-        if play == True:
-            webbrowser.open(first_video_link)
-            tts_wrapper(f"{query}에 대한 첫 번째 유튜브 영상을 열었습니다.")
-            logging.info(f"유튜브 영상 열기: {first_video_link}")
+        results = search_youtube(query)
+        if results:
+            playlist = results
+            current_track_index = 0
+            auto_play = play  # 검색 후 자동 재생 여부 설정
+            if play:
+                video_url, title = playlist[current_track_index]
+                tts_wrapper(f"{title} 오디오를 재생합니다.")
+                threading.Thread(target=play_youtube_audio, args=(video_url, 0)).start()
+            else:
+                video_url, title = playlist[current_track_index]
+                subprocess.Popen(["chromium-browser", video_url])
+                tts_wrapper(f"{title} 검색 결과를 열었습니다.")
+            logging.info(f"유튜브 URL: {video_url}")
         else:
-            webbrowser.open(search_url)
-            tts_wrapper(f"{query}에 대한 유튜브 검색 결과를 열었습니다.")
-            logging.info(f"유튜브 검색 결과 열기: {search_url}")
+            tts_wrapper("검색 결과를 찾을 수 없습니다.")
     except Exception as e:
         logging.error(f"유튜브 검색 중 오류 발생: {str(e)}")
         tts_wrapper("유튜브 검색 중 오류가 발생했습니다.")
-        webbrowser.open(search_url)
+
+
+def stop_youtube_playback():
+    global stop_event, player, paused, current_url, current_time, auto_play
+    stop_event.set()
+    if player:
+        player.stop()
+    paused = False
+    current_url = None
+    current_time = 0
+    auto_play = False  # 재생 중지 시 자동 재생 비활성화
+    tts_wrapper("유튜브 재생을 중지했습니다.")
+
+
+def pause_youtube_playback():
+    global player, paused, current_time
+    if player and not paused:
+        player.pause()
+        current_time = player.get_time() / 1000  # 현재 시간을 초 단위로 저장
+        paused = True
+        tts_wrapper("재생을 일시 중지했습니다.")
+        logging.info(f"일시 정지됨. 현재 시간: {current_time}초")
+    else:
+        tts_wrapper("재생 중인 오디오가 없습니다.")
+
+
+def resume_youtube_playback():
+    global player, paused, current_url, current_time
+    if player and paused:
+        player.play()
+        player.set_time(int(current_time * 1000))  # 저장된 시간부터 재생 시작
+        paused = False
+        tts_wrapper("재생을 재개합니다.")
+        logging.info(f"재생 재개됨. 시작 시간: {current_time}초")
+    elif not player or not current_url:
+        tts_wrapper("재생할 오디오가 없습니다.")
+    else:
+        tts_wrapper("이미 재생 중입니다.")
+
+
+def play_next_track():
+    global current_track_index, playlist
+    if playlist and len(playlist) > 1:  # 플레이리스트에 2곡 이상 있을 때만 다음 곡 재생
+        current_track_index = (current_track_index + 1) % len(playlist)
+        video_url, title = playlist[current_track_index]
+        tts_wrapper(f"다음 곡 {title}을 재생합니다.")
+        threading.Thread(target=play_youtube_audio, args=(video_url, 0)).start()
+    else:
+        tts_wrapper("재생 목록이 끝났습니다.")
+        stop_youtube_playback()
+
+
+def play_previous_track():
+    global current_track_index, playlist
+    if playlist:
+        current_track_index = (current_track_index - 1) % len(playlist)
+        video_url, title = playlist[current_track_index]
+        tts_wrapper(f"이전 곡 {title}을 재생합니다.")
+        threading.Thread(target=play_youtube_audio, args=(video_url, 0)).start()
+    else:
+        tts_wrapper("재생 목록이 비어있습니다.")
+
+
+def shuffle_playlist():
+    global playlist, current_track_index
+    if playlist:
+        random.shuffle(playlist)
+        current_track_index = 0
+        video_url, title = playlist[current_track_index]
+        tts_wrapper(f"플레이리스트를 섞었습니다. {title}을 재생합니다.")
+        threading.Thread(target=play_youtube_audio, args=(video_url,)).start()
 
 
 def get_current_time():
@@ -374,7 +509,7 @@ def convert_coord(lat, lon):
 
 
 def execute_command(command):
-    global learning_mode
+    global learning_mode, current_url, current_time
     logging.info(f"실행할 명령: {command}")
 
     if "학습 모드" in command:
@@ -389,7 +524,34 @@ def execute_command(command):
     # 사이트 이름을 매핑하는 사전
     site_mapping = {"네이버": "naver", "유튜브": "youtube", "구글": "google"}
 
-    if "열어 줘" in command:
+    if "볼륨" in command:
+        if "키우기" in command or "올려" in command:
+            adjust_volume(0.1)  # 10% 증가
+        elif "줄이기" in command or "내려" in command:
+            adjust_volume(-0.1)  # 10% 감소
+        elif "음소거 해제" in command:
+            adjust_volume(0)  # 현재 볼륨 유지
+        elif "음소거" in command:
+            adjust_volume(-1)  # 볼륨을 0으로 설정
+    elif "유튜브" in command and ("재생" in command or "틀어줘" in command):
+        query = command.split("유튜브")[1].split("재생" if "재생" in command else "틀어줘")[0].strip()
+        search_and_play_youtube(query)
+    elif "일시정지" in command or "일시 정지" in command:
+        pause_youtube_playback()
+    elif "다시 틀어줘" in command or "재개" in command:
+        if current_url:
+            threading.Thread(target=play_youtube_audio, args=(current_url, current_time)).start()
+        else:
+            resume_youtube_playback()
+    elif "다음 곡" in command or "다음곡" in command:
+        play_next_track()
+    elif "이전 곡" in command or "이전곡" in command:
+        play_previous_track()
+    elif "재생 중지" in command or "정지" in command:
+        stop_youtube_playback()
+    elif "셔플" in command or "섞어줘" in command:
+        shuffle_playlist()
+    elif "열어 줘" in command:
         site = command.split("열어 줘")[0].strip()
 
         # 사이트 이름을 매핑된 값으로 변환
@@ -399,30 +561,10 @@ def execute_command(command):
             f"https://www.{site_key}.com" if site_key else "https://www.google.com"
         )
         tts_wrapper("브라우저를 열었습니다.")
-    elif "유튜브" in command and ("재생" in command or "검색" in command):
-        query = (
-            command.split("유튜브")[1]
-            .split("재생" if "재생" in command else "검색")[0]
-            .strip()
-        )
-        search_and_play_youtube(query, play="재생" in command)
     elif "검색해 줘" in command:
         site = command.split("검색해 줘")[0].strip()
         open_website(f"https://www.google.com/search?q={site}")
         tts_wrapper(f"{site}에 대한 검색 결과입니다.")
-        search_and_play_youtube(query, play="재생" in command)
-    elif "볼륨 키우기" in command or "볼륨 올려" in command:
-        adjust_volume(0.1)  # 10% 증가
-        tts_wrapper("볼륨을 높였습니다.")
-    elif "볼륨 줄이기" in command or "볼륨 내려" in command:
-        adjust_volume(-0.1)  # 10% 감소
-        tts_wrapper("볼륨을 낮췄습니다.")
-    elif "음소거 해제" in command:
-        adjust_volume(0)  # 현재 볼륨 유지
-        tts_wrapper("음소거가 해제되었습니다.")
-    elif "음소거" in command:
-        adjust_volume(-1)  # 볼륨을 0으로 설정
-        tts_wrapper("음소거 되었습니다.")
     elif "타이머" in command:
         if "취소" in command or "끄기" in command or "중지" in command:
             cancel_timer()
@@ -482,7 +624,7 @@ def listen_for_feedback():
     with sr.Microphone() as source:
         logging.info("피드백 대기 중...")
         recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        audio = recognizer.listen(source, timeout=5, phrase_time_limit=3)
+        audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
 
     try:
         feedback = recognizer.recognize_google(audio, language="ko-KR")
@@ -531,27 +673,13 @@ def get_current_time():
 
 def adjust_volume(change):
     try:
-        with pulsectl.Pulse('volume-adjuster') as pulse:
-            sinks = pulse.sink_list()
-            if sinks:  # 기본 출력 장치 선택
-                default_sink = sinks[0]
-                volume = default_sink.volume
-                
-                # 현재 볼륨 가져오기 (모든 채널의 평균)
-                current_volume = sum(volume.values) / len(volume.values)
-                
-                # 새 볼륨 계산 (0.0 ~ 1.0 범위)
-                new_volume = max(0.0, min(1.0, current_volume + change))
-                
-                # 모든 채널에 새 볼륨 적용
-                volume.value_flat = new_volume
-                
-                # 볼륨 설정 적용
-                pulse.volume_set(default_sink, volume)
-                
-                logging.info(f"볼륨이 {new_volume:.2f}로 조정되었습니다.")
+        current_volume = int(subprocess.check_output(["amixer", "sget", "Master"]).decode().split("[")[1].split("%")[0])
+        new_volume = max(0, min(100, current_volume + int(change * 100)))
+        subprocess.run(["amixer", "sset", "Master", f"{new_volume}%"])
+        tts_wrapper(f"볼륨을 {new_volume}%로 조절했습니다.")
     except Exception as e:
         logging.error(f"볼륨 조절 실패: {str(e)}")
+        tts_wrapper("볼륨 조절에 실패했습니다.")
 
 
 def set_timer_from_command(command):
@@ -803,15 +931,17 @@ class VoiceRecognitionThread(QThread):
         response = random.choice(wake_responses)
         tts_wrapper(response)
         self.listening_state_changed.emit(True)
+        voice_recognition_start()
         self.recognize_speech()
+        idle()
         self.listening_state_changed.emit(False)
 
     def recognize_speech(self):
         try:
+            voice_recognition_start()
             with self.microphone as source:
                 logging.info("말씀해 주세요...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio = self.recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=5)
 
             text = self.recognizer.recognize_google(audio, language="ko-KR")
             logging.info(f"인식된 텍스트: {text}")
@@ -826,6 +956,8 @@ class VoiceRecognitionThread(QThread):
         except Exception as e:
             logging.error(f"음성 인식 중 오류 발생: {str(e)}", exc_info=True)
             tts_wrapper("죄송합니다. 오류가 발생했습니다.")
+        finally:
+            idle()
 
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
