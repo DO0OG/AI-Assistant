@@ -263,6 +263,9 @@ def play_youtube_audio(url, start_time=0):
     
     player.set_time(int(start_time * 1000))
     
+    # 볼륨을 50%로 설정
+    player.audio_set_volume(50)
+    
     while not stop_event.is_set():
         state = player.get_state()
         if state == vlc.State.Playing:
@@ -338,8 +341,9 @@ def resume_youtube_playback():
 
 
 def play_next_track():
-    global current_track_index, playlist
-    if playlist and len(playlist) > 1:  # 플레이리스트에 2곡 이상 있을 때만 다음 곡 재생
+    global current_track_index, playlist, player, stop_event
+    if playlist and len(playlist) > 1:
+        stop_youtube_playback()  # 현재 재생 중인 곡 중지
         current_track_index = (current_track_index + 1) % len(playlist)
         video_url, title = playlist[current_track_index]
         tts_wrapper(f"다음 곡 {title}을 재생합니다.")
@@ -350,8 +354,9 @@ def play_next_track():
 
 
 def play_previous_track():
-    global current_track_index, playlist
+    global current_track_index, playlist, player, stop_event
     if playlist:
+        stop_youtube_playback()  # 현재 재생 중인 곡 중지
         current_track_index = (current_track_index - 1) % len(playlist)
         video_url, title = playlist[current_track_index]
         tts_wrapper(f"이전 곡 {title}을 재생합니다.")
