@@ -921,7 +921,7 @@ class VoiceRecognitionThread(QThread):
             access_key=self.access_key,
             keyword_paths=[self.keyword_path],
             model_path=self.model_path,
-            sensitivities=[0.5],
+            sensitivities=[1],
         )
         logging.info("Porcupine 초기화 완료")
 
