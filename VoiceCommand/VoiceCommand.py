@@ -41,6 +41,8 @@ import io
 import yt_dlp
 import vlc
 from LEDController import voice_recognition_start, tts_start, idle
+from file_share_server import send_file
+import logging
 
 # 전역 변수 선언
 ai_assistant = None
@@ -594,6 +596,15 @@ def execute_command(command):
         except Exception as e:
             logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
             tts_wrapper("날씨 정보를 가져오는 데 실패했습니다.")
+    elif "보내 줘" in command:
+        partial_name = command.split("보내 줘")[0].strip()
+        try:
+            result = send_file(partial_name)
+            logging.info(f"파일 공유 결과: {result}")
+            tts_wrapper(result)
+        except Exception as e:
+            error_message = f"파일 공유 중 오류 발생: {str(e)}"
+            logging.error(error_message, exc_info=True)
     else:
         response, entities, sentiment = ai_assistant.process_query(command)
         tts_wrapper(response)
@@ -1001,6 +1012,7 @@ class TTSThread(QThread):
 
 
 # 명령 실행 스레드
+
 class CommandExecutionThread(QThread):
     def __init__(self):
         super().__init__()
