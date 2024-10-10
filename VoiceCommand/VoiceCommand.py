@@ -43,6 +43,7 @@ import vlc
 from LEDController import voice_recognition_start, tts_start, idle
 from file_share_server import send_file
 import logging
+from Config import get_home_assistant_url, get_home_assistant_token
 
 # 전역 변수 선언
 ai_assistant = None
@@ -674,6 +675,25 @@ def listen_for_new_response():
             "음성 인식 서비스에 문제가 발생했습니다. 나중에 다시 시도해 주세요."
         )
         return None
+
+
+def home_assistant_command(domain, service, entity_id=None, additional_data=None):
+    url = f"{get_home_assistant_url()}/api/services/{domain}/{service}"
+    headers = {
+        "Authorization": f"Bearer {get_home_assistant_token()}",
+        "Content-Type": "application/json",
+    }
+    data = additional_data or {}
+    if entity_id:
+        data["entity_id"] = entity_id
+
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        logging.error(f"Home Assistant 명령 실행 중 오류 발생: {e}")
+        return False
 
 
 def get_current_time():

@@ -44,9 +44,14 @@ def use_api(key_name, api_url=None, params={}):
 
 config = load_config()
 
-# 새로 추가된 함수들
 def get_discord_bot_token():
     return use_api('discord_bot_token')
 
 def get_discord_user_id():
     return int(use_api('discord_user_id'))
+
+def get_home_assistant_url():
+    return use_api('home_assistant_url')
+
+def get_home_assistant_token():
+    return use_api('home_assistant_token')
