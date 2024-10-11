@@ -405,18 +405,25 @@ def get_current_location():
 
 
 def get_weather_info(lat, lon):
-    base_url = (
-        "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst"
-    )
+    base_url = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
     service_key = use_api("weather_api_key")
 
     now = datetime.now()
     base_date = now.strftime("%Y%m%d")
-    base_time = (now - timedelta(hours=1)).strftime("%H00")
+    
+    # 단기예보 발표 시간에 맞춰 base_time 설정
+    forecast_times = ['0200', '0500', '0800', '1100', '1400', '1700', '2000', '2300']
+    base_time = max([t for t in forecast_times if now.strftime("%H%M") > t] or ['2300'])
+    
+    # 만약 선택된 시간이 '2300'이고 현재 시간이 00:00 ~ 02:00 사이라면 어제 날짜의 23:00 발표 사용
+    if base_time == '2300' and now.strftime("%H%M") < '0200':
+        base_date = (now - timedelta(days=1)).strftime("%Y%m%d")
 
     nx, ny = convert_coord(lat, lon)
 
-    params = {
+    # 초단기실황 조회
+    ultra_srt_ncst_url = f"{base_url}/getUltraSrtNcst"
+    ultra_srt_ncst_params = {
         "serviceKey": service_key,
         "pageNo": "1",
         "numOfRows": "1000",
@@ -427,53 +434,99 @@ def get_weather_info(lat, lon):
         "ny": str(ny),
     }
 
-    logging.info(f"API 요청 파라미터: {params}")
-
     try:
-        response = requests.get(base_url, params=params, verify=False)
-        response.raise_for_status()
+        # 초단기실황 데이터 가져오기
+        ultra_srt_ncst_response = requests.get(ultra_srt_ncst_url, params=ultra_srt_ncst_params)
+        ultra_srt_ncst_response.raise_for_status()
+        logging.info(f"초단기실황 API 응답: {ultra_srt_ncst_response.text}")
+        ultra_srt_ncst_data = ultra_srt_ncst_response.json()
 
-        logging.info(f"API 응답: {response.text}")
+        # 초단기실황 데이터 처리
+        if 'response' not in ultra_srt_ncst_data or 'body' not in ultra_srt_ncst_data['response']:
+            raise ValueError("초단기실황 API 응답 형식이 올바르지 않습니다.")
+        
+        items = ultra_srt_ncst_data["response"]["body"]["items"]["item"]
+        current_weather = {}
+        for item in items:
+            current_weather[item["category"]] = item["obsrValue"]
 
-        data = response.json()
+        # 현재 날씨 정보
+        temp = float(current_weather.get("T1H", "N/A"))
+        humidity = int(current_weather.get("REH", "N/A"))
+        rain = float(current_weather.get("RN1", "0"))
+        wind_speed = float(current_weather.get("WSD", "N/A"))
 
-        if data["response"]["header"]["resultCode"] == "00":
-            items = data["response"]["body"]["items"]["item"]
+        # 날씨 상태 결정
+        pty = int(current_weather.get("PTY", "0"))
+        weather_status = "맑음"
+        if pty == 1:
+            weather_status = "비"
+        elif pty == 2:
+            weather_status = "비/눈"
+        elif pty == 3:
+            weather_status = "눈"
+        elif pty == 4:
+            weather_status = "소나기"
 
-            weather_info = {}
+        weather_info = f"현재 날씨는 {weather_status}입니다. "
+        weather_info += f"기온은 {temp:.1f}도, 습도는 {humidity}%, "
+        
+        if rain > 0:
+            weather_info += f"현재 강수량은 {rain:.1f}밀리미터 입니다."
+
+        # 단기예보 데이터 가져오기
+        vilage_fcst_url = f"{base_url}/getVilageFcst"
+        vilage_fcst_params = {
+            "serviceKey": service_key,
+            "pageNo": "1",
+            "numOfRows": "1000",
+            "dataType": "JSON",
+            "base_date": base_date,
+            "base_time": base_time,
+            "nx": str(nx),
+            "ny": str(ny),
+        }
+
+        vilage_fcst_response = requests.get(vilage_fcst_url, params=vilage_fcst_params)
+        vilage_fcst_response.raise_for_status()
+        logging.info(f"단기예보 API 응답: {vilage_fcst_response.text}")
+        vilage_fcst_data = vilage_fcst_response.json()
+
+        if vilage_fcst_data["response"]["header"]["resultCode"] == "00":
+            items = vilage_fcst_data["response"]["body"]["items"]["item"]
+            forecast = {}
             for item in items:
-                category = item["category"]
-                value = item["obsrValue"]
-                weather_info[category] = value
+                if item["category"] not in forecast:
+                    forecast[item["category"]] = []
+                forecast[item["category"]].append({"fcstDate": item["fcstDate"], "fcstTime": item["fcstTime"], "fcstValue": item["fcstValue"]})
 
-            temp = float(weather_info.get("T1H", "N/A"))
-            humidity = int(weather_info.get("REH", "N/A"))
-            rain = float(weather_info.get("RN1", "0"))
+            today = now.strftime("%Y%m%d")
+            tmx = max([float(item["fcstValue"]) for item in forecast.get("TMX", []) if item["fcstDate"] == today] or [float('-inf')])
+            tmn = min([float(item["fcstValue"]) for item in forecast.get("TMN", []) if item["fcstDate"] == today] or [float('inf')])
+            pop = max([int(item["fcstValue"]) for item in forecast.get("POP", []) if item["fcstDate"] == today] or [0])
 
-            weather_status = "맑음"
-            if rain > 0:
-                weather_status = "비"
-            elif int(weather_info.get("PTY", "0")) > 0:
-                weather_status = "눈 또는 비"
-
-            # 소수점을 "점"으로 바꾸고, 숫자를 읽기 쉽게 조정
-            temp_str = f"{int(temp)}점 {int((temp % 1) * 10)}"
-            rain_str = f"{int(rain)}점 {int((rain % 1) * 10)}"
-
-            return (
-                f"현재 날씨는 {weather_status}입니다. "
-                f"기온은 {temp_str}도, 습도는 {humidity}퍼센트, "
-                f"강수량은 {rain_str}밀리미터입니다."
-            )
+            if tmx != float('-inf') and tmn != float('inf'):
+                weather_info += f"오늘의 최고 기온은 {tmx:.1f}도, 최저 기온은 {tmn:.1f}도입니다. "
+            elif tmx != float('-inf'):
+                weather_info += f"오늘의 최고 기온은 {tmx:.1f}도입니다. "
+            elif tmn != float('inf'):
+                weather_info += f"오늘의 최저 기온은 {tmn:.1f}도입니다. "
+            
+            weather_info += f"강수 확률은 {pop}%입니다."
         else:
-            logging.error(f"API 오류: {data['response']['header']['resultMsg']}")
-            return "날씨 정보를 가져오는 데 실패했습니다."
+            weather_info += "최고/최저 기온과 강수 확률 정보는 현재 이용할 수 없습니다."
+
+        return weather_info
+
     except requests.exceptions.RequestException as e:
-        logging.error(f"요청 오류: {str(e)}")
+        logging.error(f"날씨 정보 요청 오류: {str(e)}")
         return "날씨 정보를 가져오는 데 실패했습니다."
     except ValueError as e:
-        logging.error(f"JSON 파싱 오류: {str(e)}")
-        return "날씨 정보를 가져오는 데 실패했습니다."
+        logging.error(f"날씨 정보 처리 오류: {str(e)}")
+        return "날씨 정보를 처리하는 데 실패했습니다."
+    except Exception as e:
+        logging.error(f"예상치 못한 오류 발생: {str(e)}", exc_info=True)
+        return "날씨 정보를 가져오는 중 오류가 발생했습니다."
 
 
 def convert_coord(lat, lon):
