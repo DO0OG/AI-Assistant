@@ -40,9 +40,10 @@ from pydub.playback import play
 import io
 import yt_dlp
 import vlc
+import logging
+from homeassistant_api import Client
 from LEDController import voice_recognition_start, tts_start, idle
 from file_share_server import send_file
-import logging
 from Config import get_home_assistant_url, get_home_assistant_token
 
 # 전역 변수 선언
@@ -185,31 +186,20 @@ def set_timer(minutes):
 
 
 def set_shutdown_timer(minutes):
-    global active_shutdown_timer
-
-    def shutdown_timer_thread():
-        global active_shutdown_timer
-        if (
-            active_shutdown_timer
-            and datetime.now() >= active_shutdown_timer["end_time"]
-        ):
-            tts_wrapper(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
-            shutdown_computer()
-            active_shutdown_timer = None
-        elif active_shutdown_timer:
-            # 1초마다 확인하도록 새로운 타이머 설정
-            threading.Timer(1, shutdown_timer_thread).start()
-
-    if active_shutdown_timer:
-        active_shutdown_timer["timer"].cancel()
-
-    end_time = datetime.now() + timedelta(minutes=minutes)
-    active_shutdown_timer = {
-        "timer": threading.Timer(1, shutdown_timer_thread),
-        "end_time": end_time,
-    }
-    active_shutdown_timer["timer"].start()
-    tts_wrapper(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
+    try:
+        # 홈 어시스턴트에 타이머 설정 요청
+        timer_data = {
+            "duration": f"00:{minutes:02d}:00",
+            "entity_id": "script.shutdown_mypc"
+        }
+        result = home_assistant_command("timer", "start", additional_data=timer_data)
+        if result:
+            tts_wrapper(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
+        else:
+            tts_wrapper("컴퓨터 종료 타이머 설정에 실패했습니다.")
+    except Exception as e:
+        logging.error(f"컴퓨터 종료 타이머 설정 실패: {str(e)}")
+        tts_wrapper("컴퓨터 종료 타이머를 설정하는 중 오류가 발생했습니다.")
 
 
 def open_website(url):
@@ -638,9 +628,10 @@ def execute_command(command):
         logging.info(f"현재 시간 안내: {response}")
     elif "분 뒤에 컴퓨터 꺼 줘" in command or "분 후에 컴퓨터 꺼 줘" in command:
         set_shutdown_timer_from_command(command)
-    elif "전원 꺼 줘" in command or "컴퓨터 꺼 줘" in command:
-        tts_wrapper("컴퓨터를 종료합니다.")
-        shutdown_computer()
+    elif "컴퓨터 켜 줘" in command:
+        turn_on_computer()
+    elif "컴퓨터 꺼 줘" in command:
+        turn_off_computer()
     elif "날씨 어때" in command:
         try:
             lat, lon = get_current_location()
@@ -687,6 +678,30 @@ def execute_command(command):
 
                 # 강화학습 업데이트
                 ai_assistant.update_q_table(command, "use_best_response", 1, command)
+
+
+def turn_on_computer():
+    try:
+        result = home_assistant_command("switch", "turn_on", "switch.mypc")
+        if result:
+            tts_wrapper("컴퓨터를 켰습니다.")
+        else:
+            tts_wrapper("컴퓨터를 켜는 데 실패했습니다.")
+    except Exception as e:
+        logging.error(f"컴퓨터 켜기 실패: {str(e)}")
+        tts_wrapper("컴퓨터를 켜는 중 오류가 발생했습니다.")
+
+
+def turn_off_computer():
+    try:
+        result = home_assistant_command("script", "turn_on", "script.shutdown_mypc")
+        if result:
+            tts_wrapper("컴퓨터를 종료합니다.")
+        else:
+            tts_wrapper("컴퓨터 종료에 실패했습니다.")
+    except Exception as e:
+        logging.error(f"컴퓨터 종료 실패: {str(e)}")
+        tts_wrapper("컴퓨터를 종료하는 중 오류가 발생했습니다.")
 
 
 def listen_for_feedback():
@@ -781,7 +796,7 @@ def set_timer_from_command(command):
 
 def set_shutdown_timer_from_command(command):
     try:
-        minutes = int("".join(filter(str.isdigit, command)))
+        minutes = int(''.join(filter(str.isdigit, command)))
         set_shutdown_timer(minutes)
     except ValueError:
         tts_wrapper("종료 시간을 정확히 말씀해 주세요.")
