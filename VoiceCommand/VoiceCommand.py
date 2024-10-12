@@ -40,10 +40,9 @@ from pydub.playback import play
 import io
 import yt_dlp
 import vlc
-import logging
-from scipy import signal
 from LEDController import voice_recognition_start, tts_start, idle
 from file_share_server import send_file
+import logging
 from Config import get_home_assistant_url, get_home_assistant_token
 
 # 전역 변수 선언
@@ -124,11 +123,7 @@ async def text_to_speech(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0
 
         # 오디오 재생 (MP3 형식으로 처리)
         audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
-        
-        # 볼륨 줄이기
-        reduced_volume = audio - 3
-        
-        play(reduced_volume)
+        play(audio)
 
         # TTS 재생 후에 음성 인식을 다시 활성화
         if (
@@ -888,84 +883,6 @@ class VoiceRecognitionThread(QThread):
         # 마이크 초기화
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone(device_index=self.microphone_index)
-        self.init_pipewire()
-        self.init_audio_processing()
-
-    def init_pipewire(self):
-        try:
-            # 기본 입력 장치 찾기
-            result = subprocess.run(['pw-dump'], capture_output=True, text=True)
-            nodes = json.loads(result.stdout)
-            input_node = next((node for node in nodes if node.get('info', {}).get('props', {}).get('media.class') == 'Audio/Source'), None)
-            
-            if input_node:
-                node_id = input_node['id']
-                # 초기 볼륨을 높게 설정 (2.5 = 250%)
-                subprocess.run(['pw-cli', 's', str(node_id), 'Props', '{"channelVolumes": [2.5, 2.5]}'])
-                logging.info(f"PipeWire 입력 장치 볼륨 증가됨: {node_id}")
-            
-            # 노이즈 제거, AGC, 및 추가 필터 적용
-            filter_chain = [
-                {
-                    "node.description": "Enhanced Audio Processing",
-                    "media.name": "Enhanced Audio Processing",
-                    "filter.graph": {
-                        "nodes": [
-                            {
-                                "type": "filter",
-                                "name": "noise_suppressor",
-                                "plugin": "libspa-noise-remove",
-                                "label": "Noise Suppressor",
-                                "control": {
-                                    "Suppression Level": 0.8  # 노이즈 제거 강화
-                                }
-                            },
-                            {
-                                "type": "filter",
-                                "name": "agc",
-                                "plugin": "libspa-audioconvert",
-                                "label": "Audio Convert",
-                                "control": {
-                                    "volume": 1.0,
-                                    "mute": false,
-                                    "soft-volume": true,
-                                    "auto-volume": true,
-                                    "auto-volume-threshold": -30.0,  # 더 낮은 임계값
-                                    "auto-volume-window": 300  # 더 빠른 반응
-                                }
-                            },
-                            {
-                                "type": "filter",
-                                "name": "compressor",
-                                "plugin": "libspa-audioconvert",
-                                "label": "Audio Convert",
-                                "control": {
-                                    "compress": true,
-                                    "compress-threshold": -24.0,
-                                    "compress-ratio": 4.0,
-                                    "compress-attack": 2.0,
-                                    "compress-release": 200.0
-                                }
-                            }
-                        ]
-                    },
-                    "capture.props": {
-                        "node.name": "effect_input.enhanced_audio",
-                        "node.passive": True
-                    },
-                    "playback.props": {
-                        "node.name": "effect_output.enhanced_audio",
-                        "media.class": "Audio/Source"
-                    }
-                }
-            ]
-            filter_json = json.dumps(filter_chain)
-            subprocess.run(['pw-cli', 'create-filter', filter_json])
-            logging.info("PipeWire 고급 오디오 처리 필터 적용됨")
-            
-            logging.info("PipeWire 설정 완료")
-        except Exception as e:
-            logging.error(f"PipeWire 설정 실패: {e}")
 
     def init_microphone(self):
         if self.selected_microphone:
@@ -1053,88 +970,39 @@ class VoiceRecognitionThread(QThread):
                 return index
         return None
 
-    def init_audio_processing(self):
-        # 프리엠파시스 필터 계수
-        self.preemphasis = 0.97
-        
-        # 노이즈 게이트 설정
-        self.noise_gate_threshold = 300  # 조정 가능한 값
-        
-        # AGC 설정
-        self.agc_target = 5000  # 목표 진폭
-        self.agc_gain = 1.0
-        self.agc_max_gain = 20.0
-        self.agc_attack = 0.1
-        self.agc_decay = 0.01
-
-    def process_audio(self, audio_data):
-        # int16에서 float32로 변환
-        float_data = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-
-        # 프리엠파시스 필터 적용
-        emphasized_data = signal.lfilter([1, -self.preemphasis], [1], float_data)
-        
-        # 노이즈 게이트 적용
-        gate_mask = np.abs(emphasized_data) > (self.noise_gate_threshold / 32768.0)
-        gated_data = emphasized_data * gate_mask
-        
-        # AGC 적용
-        max_amplitude = np.max(np.abs(gated_data))
-        if max_amplitude > 0:
-            target_gain = self.agc_target / (max_amplitude * 32768.0)
-            if target_gain > self.agc_gain:
-                self.agc_gain = min(self.agc_gain * (1 + self.agc_attack), target_gain, self.agc_max_gain)
-            else:
-                self.agc_gain = max(self.agc_gain * (1 - self.agc_decay), target_gain)
-        
-        amplified_data = gated_data * self.agc_gain
-        
-        # float32에서 int16으로 변환
-        processed_data = np.clip(amplified_data * 32768.0, -32768, 32767).astype(np.int16)
-        
-        return processed_data.tobytes()
-
     def run(self):
-        pa = pyaudio.PyAudio()
-        audio_stream = pa.open(
-            rate=self.porcupine.sample_rate,
-            channels=1,
-            format=pyaudio.paInt16,
-            input=True,
-            frames_per_buffer=self.porcupine.frame_length,
-            input_device_index=None,
-        )
-
         try:
-            while self.running:
-                pcm = audio_stream.read(self.porcupine.frame_length, exception_on_overflow=False)
-                
-                # 오디오 신호 처리
-                processed_pcm = self.process_audio(pcm)
-                
-                pcm_int16 = struct.unpack_from("h" * self.porcupine.frame_length, processed_pcm)
+            self.init_porcupine()
+            self.init_audio()
 
-                keyword_index = self.porcupine.process(pcm_int16)
+            with self.audio_stream:
+                while self.running:
+                    pcm, overflowed = self.audio_stream.read(self.porcupine.frame_length)
+                    pcm = np.frombuffer(pcm, dtype=np.int16)
 
-                if keyword_index >= 0:
-                    logging.info("웨이크 워드 감지됨!")
-                    self.wake_word_detected()
-                    
-                # Vosk를 사용한 음성 인식
-                if self.is_listening and not self.is_processing and not self.is_tts_playing:
-                    if self.recognizer.AcceptWaveform(processed_pcm):
-                        result = json.loads(self.recognizer.Result())
-                        if result.get("text", ""):
-                            logging.info(f"인식된 텍스트: {result['text']}")
-                            self.result.emit(result["text"])
+                    keyword_index = self.porcupine.process(pcm)
+                    if keyword_index >= 0:
+                        self.handle_wake_word()
+
+                    # Vosk를 사용한 음성 인식 추가
+                    if self.is_listening and not self.is_processing and not self.is_tts_playing:
+                        try:
+                            self.is_processing = True
+                            if self.recognizer.AcceptWaveform(pcm.tobytes()):
+                                result = self.recognizer.Result()
+                                vosk_result = json.loads(result)["text"]
+                                if vosk_result:
+                                    logging.info(f"Vosk 인식 결과: {vosk_result}")
+                                    self.result.emit(vosk_result)
+                        except Exception as e:
+                            logging.error(f"Vosk 음성 인식 중 오류 발생: {str(e)}")
+                        finally:
+                            self.is_processing = False
 
         except Exception as e:
-            logging.error(f"음성 인식 스레드 오류: {str(e)}")
+            logging.error(f"오류 발생: {str(e)}", exc_info=True)
         finally:
-            audio_stream.stop_stream()
-            audio_stream.close()
-            pa.terminate()
-            self.porcupine.delete()
+            self.cleanup()
 
     def init_porcupine(self):
         logging.info("Porcupine 초기화 중...")
