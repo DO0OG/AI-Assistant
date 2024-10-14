@@ -186,20 +186,26 @@ def set_timer(minutes):
 
 
 def set_shutdown_timer(minutes):
-    try:
-        # 홈 어시스턴트에 타이머 설정 요청
-        timer_data = {
-            "duration": f"00:{minutes:02d}:00",
-            "entity_id": "script.shutdown_mypc"
-        }
-        result = home_assistant_command("timer", "start", additional_data=timer_data)
-        if result:
-            tts_wrapper(f"{minutes}분 후에 컴퓨터를 종료하도록 설정했습니다.")
-        else:
-            tts_wrapper("컴퓨터 종료 타이머 설정에 실패했습니다.")
-    except Exception as e:
-        logging.error(f"컴퓨터 종료 타이머 설정 실패: {str(e)}")
-        tts_wrapper("컴퓨터 종료 타이머를 설정하는 중 오류가 발생했습니다.")
+    global active_shutdown_timer
+
+    def shutdown_timer_thread():
+        global active_shutdown_timer
+        if (
+            active_shutdown_timer
+            and datetime.now() >= active_shutdown_timer["end_time"]
+        ):
+            try:
+                result = home_assistant_command("script", "turn_on", "script.shutdown_mypc")
+                if result:
+                    tts_wrapper(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
+                else:
+                    tts_wrapper("컴퓨터 종료에 실패했습니다.")
+            except Exception as e:
+                logging.error(f"컴퓨터 종료 실패: {str(e)}")
+                tts_wrapper("컴퓨터를 종료하는 중 오류가 발생했습니다.")
+        elif active_shutdown_timer:
+            # 1초마다 확인하도록 새로운 타이머 설정
+            threading.Timer(1, shutdown_timer_thread).start()
 
 
 def open_website(url):
