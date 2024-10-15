@@ -190,22 +190,32 @@ def set_shutdown_timer(minutes):
 
     def shutdown_timer_thread():
         global active_shutdown_timer
-        if (
-            active_shutdown_timer
-            and datetime.now() >= active_shutdown_timer["end_time"]
-        ):
+        if active_shutdown_timer and datetime.now() >= active_shutdown_timer["end_time"]:
             try:
-                result = home_assistant_command("script", "turn_on", "script.shutdown_mypc")
+                result = home_assistant_command("input_boolean", "turn_off", "input_boolean.pc_power")
                 if result:
                     tts_wrapper(f"{minutes}분이 지났습니다. 컴퓨터를 종료합니다.")
                 else:
-                    tts_wrapper("컴퓨터 종료에 실패했습니다.")
+                    tts_wrapper("컴퓨터 종료에 실패했습니다. Home Assistant 응답을 확인해주세요.")
             except Exception as e:
                 logging.error(f"컴퓨터 종료 실패: {str(e)}")
                 tts_wrapper("컴퓨터를 종료하는 중 오류가 발생했습니다.")
+            finally:
+                active_shutdown_timer = None
         elif active_shutdown_timer:
-            # 1초마다 확인하도록 새로운 타이머 설정
-            threading.Timer(1, shutdown_timer_thread).start()
+            remaining_time = (active_shutdown_timer["end_time"] - datetime.now()).total_seconds()
+            if remaining_time > 0:
+                threading.Timer(1, shutdown_timer_thread).start()
+            else:
+                active_shutdown_timer = None
+
+    if active_shutdown_timer:
+        active_shutdown_timer["timer"].cancel()
+
+    end_time = datetime.now() + timedelta(minutes=minutes)
+    active_shutdown_timer = {"timer": threading.Timer(1, shutdown_timer_thread), "end_time": end_time}
+    active_shutdown_timer["timer"].start()
+    tts_wrapper(f"{minutes}분 후에 컴퓨터가 종료됩니다.")
 
 
 def open_website(url):
@@ -688,26 +698,26 @@ def execute_command(command):
 
 def turn_on_computer():
     try:
-        result = home_assistant_command("switch", "turn_on", "switch.mypc")
+        result = home_assistant_command("input_boolean", "turn_on", "input_boolean.pc_power")
         if result:
             tts_wrapper("컴퓨터를 켰습니다.")
         else:
-            tts_wrapper("컴퓨터를 켜는 데 실패했습니다.")
+            tts_wrapper("컴퓨터를 켜는 데 실패했습니다. Home Assistant 응답을 확인해주세요.")
     except Exception as e:
         logging.error(f"컴퓨터 켜기 실패: {str(e)}")
-        tts_wrapper("컴퓨터를 켜는 중 오류가 발생했습니다.")
+        tts_wrapper("컴퓨터를 켜는 중 오류가 발생했습니다. Home Assistant 연결을 확인해주세요.")
 
 
 def turn_off_computer():
     try:
-        result = home_assistant_command("script", "turn_on", "script.shutdown_mypc")
+        result = home_assistant_command("input_boolean", "turn_off", "input_boolean.pc_power")
         if result:
             tts_wrapper("컴퓨터를 종료합니다.")
         else:
-            tts_wrapper("컴퓨터 종료에 실패했습니다.")
+            tts_wrapper("컴퓨터 종료에 실패했습니다. Home Assistant 응답을 확인해주세요.")
     except Exception as e:
         logging.error(f"컴퓨터 종료 실패: {str(e)}")
-        tts_wrapper("컴퓨터를 종료하는 중 오류가 발생했습니다.")
+        tts_wrapper("컴퓨터를 종료하는 중 오류가 발생했습니다. Home Assistant 연결을 확인해주세요.")
 
 
 def listen_for_feedback():
@@ -762,7 +772,7 @@ def home_assistant_command(domain, service, entity_id=None, additional_data=None
         data["entity_id"] = entity_id
 
     try:
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         return True
     except requests.RequestException as e:
