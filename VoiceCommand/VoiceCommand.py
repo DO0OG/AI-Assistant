@@ -34,7 +34,7 @@ import pvporcupine
 from vosk import Model, KaldiRecognizer
 import json
 import asyncio
-from edge_tts import Communicate
+from espnet2.bin.tts_inference import Text2Speech
 from pydub import AudioSegment
 from pydub.playback import play
 import io
@@ -42,17 +42,36 @@ import yt_dlp
 import vlc
 import logging
 from homeassistant_api import Client
+from functools import lru_cache
 from LEDController import voice_recognition_start, tts_start, idle
 from file_share_server import send_file
 from Config import get_home_assistant_url, get_home_assistant_token
 
 # 전역 변수 선언
+model = None
+loop = None
 ai_assistant = None
 icon_path = None
 pulse = None
 active_timer = None
 active_shutdown_timer = None
 learning_mode = False
+
+
+def initialize_tts():
+    global model
+    model = Text2Speech.from_pretrained("imdanboy/kss_jets")
+
+
+# 초기화 함수 호출
+initialize_tts()
+
+
+@lru_cache(maxsize=100)  # 최근 100개의 결과를 캐시
+def generate_speech(text):
+    wav = model(text)["wav"]
+    return wav.cpu().numpy()
+
 
 player = None
 stop_event = threading.Event()
@@ -102,47 +121,22 @@ class VoskRecognizer:
         self.mic.terminate()
 
 
-async def text_to_speech(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0%"):
+async def text_to_speech(text):
     try:
-        communicate = Communicate(text, voice, rate=rate, volume=volume)
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-
-        # TTS 재생 전에 음성 인식을 비활성화
-        app = QApplication.instance()
-        main_window = next(
-            (w for w in app.topLevelWidgets() if w.objectName() == "MainWindow"), None
-        )
-        if (
-            main_window
-            and hasattr(main_window, "voice_thread")
-            and main_window.voice_thread
-        ):
-            main_window.voice_thread.is_tts_playing = True
-
-        # 오디오 재생 (MP3 형식으로 처리)
-        audio = AudioSegment.from_mp3(io.BytesIO(audio_data))
-        play(audio)
-
-        # TTS 재생 후에 음성 인식을 다시 활성화
-        if (
-            main_window
-            and hasattr(main_window, "voice_thread")
-            and main_window.voice_thread
-        ):
-            main_window.voice_thread.is_tts_playing = False
-
+        wav = generate_speech(text)
+        
+        # 음성 출력 최적화
+        sd.play(wav, samplerate=model.fs, blocking=False)
+        await asyncio.sleep(len(wav) / model.fs)
+        sd.stop()
+        
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
 
-def tts_wrapper(text, voice="ko-KR-SunHiNeural", rate="+0%", volume="+0%"):
+def tts_wrapper(text):
     tts_start()  # TTS 시작 시 LED 상태 변경
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(text_to_speech(text, voice, rate, volume))
+    asyncio.run(text_to_speech(text))
     idle()  # TTS 종료 후 LED 상태를 기본으로 변경
 
 
@@ -416,11 +410,11 @@ def get_weather_info(lat, lon):
 
     now = datetime.now()
     base_date = now.strftime("%Y%m%d")
-    
+
     # 단기예보 발표 시간에 맞춰 base_time 설정
     forecast_times = ['0200', '0500', '0800', '1100', '1400', '1700', '2000', '2300']
     base_time = max([t for t in forecast_times if now.strftime("%H%M") > t] or ['2300'])
-    
+
     # 만약 선택된 시간이 '2300'이고 현재 시간이 00:00 ~ 02:00 사이라면 어제 날짜의 23:00 발표 사용
     if base_time == '2300' and now.strftime("%H%M") < '0200':
         base_date = (now - timedelta(days=1)).strftime("%Y%m%d")
@@ -450,7 +444,7 @@ def get_weather_info(lat, lon):
         # 초단기실황 데이터 처리
         if 'response' not in ultra_srt_ncst_data or 'body' not in ultra_srt_ncst_data['response']:
             raise ValueError("초단기실황 API 응답 형식이 올바르지 않습니다.")
-        
+
         items = ultra_srt_ncst_data["response"]["body"]["items"]["item"]
         current_weather = {}
         for item in items:
@@ -475,10 +469,10 @@ def get_weather_info(lat, lon):
             weather_status = "소나기"
 
         weather_info = f"현재 날씨는 {weather_status}입니다. "
-        weather_info += f"기온은 {temp:.1f}도, 습도는 {humidity}%, "
-        
+        weather_info += f"기온은 {format_decimal(temp)}도, 습도는 {humidity}%, "
+
         if rain > 0:
-            weather_info += f"현재 강수량은 {rain:.1f}밀리미터 입니다."
+            weather_info += f"현재 강수량은 {format_decimal(rain)}밀리미터 입니다."
 
         # 단기예보 데이터 가져오기
         vilage_fcst_url = f"{base_url}/getVilageFcst"
@@ -512,12 +506,12 @@ def get_weather_info(lat, lon):
             pop = max([int(item["fcstValue"]) for item in forecast.get("POP", []) if item["fcstDate"] == today] or [0])
 
             if tmx != float('-inf') and tmn != float('inf'):
-                weather_info += f"오늘의 최고 기온은 {tmx:.1f}도, 최저 기온은 {tmn:.1f}도입니다. "
+                weather_info += f"오늘의 최고 기온은 {format_decimal(tmx)}도, 최저 기온은 {format_decimal(tmn)}도입니다. "
             elif tmx != float('-inf'):
-                weather_info += f"오늘의 최고 기온은 {tmx:.1f}도입니다. "
+                weather_info += f"오늘의 최고 기온은 {format_decimal(tmx)}도입니다. "
             elif tmn != float('inf'):
-                weather_info += f"오늘의 최저 기온은 {tmn:.1f}도입니다. "
-            
+                weather_info += f"오늘의 최저 기온은 {format_decimal(tmn)}도입니다. "
+
             weather_info += f"강수 확률은 {pop}%입니다."
         else:
             weather_info += "최고/최저 기온과 강수 확률 정보는 현재 이용할 수 없습니다."
@@ -533,6 +527,14 @@ def get_weather_info(lat, lon):
     except Exception as e:
         logging.error(f"예상치 못한 오류 발생: {str(e)}", exc_info=True)
         return "날씨 정보를 가져오는 중 오류가 발생했습니다."
+
+
+def format_decimal(value, decimal_places=1):
+    integer_part = int(value)
+    decimal_part = int((value - integer_part) * (10**decimal_places))
+    if decimal_part == 0:
+        return f"{integer_part}"
+    return f"{integer_part}점{decimal_part}"
 
 
 def convert_coord(lat, lon):
@@ -1100,15 +1102,13 @@ class TTSThread(QThread):
     def __init__(self):
         super().__init__()
         self.queue = Queue()
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
 
     def run(self):
         while True:
             text = self.queue.get()
             if text is None:
                 break
-            self.loop.run_until_complete(text_to_speech(text))
+            tts_wrapper(text)
             self.queue.task_done()
 
     def speak(self, text):
