@@ -34,7 +34,6 @@ import pvporcupine
 from vosk import Model, KaldiRecognizer
 import json
 import asyncio
-from espnet2.bin.tts_inference import Text2Speech
 from pydub import AudioSegment
 from pydub.playback import play
 import io
@@ -46,6 +45,7 @@ from functools import lru_cache
 from LEDController import voice_recognition_start, tts_start, idle
 from file_share_server import send_file
 from Config import get_home_assistant_url, get_home_assistant_token
+from melo.api import TTS
 
 # 전역 변수 선언
 model = None
@@ -56,11 +56,19 @@ pulse = None
 active_timer = None
 active_shutdown_timer = None
 learning_mode = False
+tts_model = None
+speaker_ids = None
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def initialize_tts():
-    global model
-    model = Text2Speech.from_pretrained("imdanboy/kss_jets")
+    global tts_model, speaker_ids
+    try:
+        tts_model = TTS(language="KR", device=device)
+        speaker_ids = tts_model.hps.data.spk2id
+        logging.info("TTS 모델 로딩 완료. " + device)
+    except Exception as e:
+        logging.error(f"TTS 모델 로딩 중 오류 발생: {str(e)}")
 
 
 # 초기화 함수 호출
@@ -121,22 +129,28 @@ class VoskRecognizer:
         self.mic.terminate()
 
 
-async def text_to_speech(text):
+def text_to_speech(text):
+    global tts_model, speaker_ids
+    if tts_model is None or speaker_ids is None:
+        logging.error("TTS 모델이 초기화되지 않았습니다.")
+        return
+
     try:
-        wav = generate_speech(text)
-        
-        # 음성 출력 최적화
-        sd.play(wav, samplerate=model.fs, blocking=False)
-        await asyncio.sleep(len(wav) / model.fs)
-        sd.stop()
-        
+        output_path = os.path.abspath("response.wav")
+        tts_model.tts_to_file(text, speaker_ids["KR"], output_path)
+
+        # pydub를 사용하여 오디오 재생
+        sound = AudioSegment.from_file(output_path)
+        play(sound)
+        os.remove(output_path)  # 오디오 파일 삭제
+
     except Exception as e:
         logging.error(f"TTS 처리 중 오류 발생: {str(e)}")
 
 
 def tts_wrapper(text):
     tts_start()  # TTS 시작 시 LED 상태 변경
-    asyncio.run(text_to_speech(text))
+    text_to_speech(text)
     idle()  # TTS 종료 후 LED 상태를 기본으로 변경
 
 
@@ -299,7 +313,7 @@ def search_and_play_youtube(query, play=True):
                 tts_wrapper(f"{title} 검색 결과를 열었습니다.")
             logging.info(f"유튜브 URL: {video_url}")
         else:
-            tts_wrapper("검색 결과를 찾을 수 없습니다.")
+            tts_wrapper("색 결과를 찾을 수 없습니다.")
     except Exception as e:
         logging.error(f"유튜브 검색 중 오류 발생: {str(e)}")
         tts_wrapper("유튜브 검색 중 오류가 발생했습니다.")
@@ -520,7 +534,7 @@ def get_weather_info(lat, lon):
 
     except requests.exceptions.RequestException as e:
         logging.error(f"날씨 정보 요청 오류: {str(e)}")
-        return "날씨 정보를 가져오는 데 실패했습니다."
+        return "날 정보를 가져오는 데 실패했습니다."
     except ValueError as e:
         logging.error(f"날씨 정보 처리 오류: {str(e)}")
         return "날씨 정보를 처리하는 데 실패했습니다."
@@ -1108,7 +1122,7 @@ class TTSThread(QThread):
             text = self.queue.get()
             if text is None:
                 break
-            tts_wrapper(text)
+            text_to_speech(text)
             self.queue.task_done()
 
     def speak(self, text):

@@ -27,6 +27,8 @@ from LEDController import (
     get_led_controller,
     cleanup as led_cleanup,
 )
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # 전역 변수 선언
 tts_model = None
@@ -148,6 +150,9 @@ class AriCore(QObject):
         self.init_connections()
         self.load_settings()
 
+        self.file_observer = start_file_watcher()
+        logging.info("파일 감시 시작")
+
     def init_threads(self):
         self.voice_thread.start()
         self.tts_thread.start()
@@ -214,6 +219,24 @@ class AriCore(QObject):
         self.resource_monitor.stop()
         led_cleanup()  # LED 정리
         logging.info("AriCore 정리 완료")
+        self.file_observer.stop()
+        self.file_observer.join()
+        logging.info("파일 감시 종료")
+
+
+class FileChangeHandler(FileSystemEventHandler):
+    def on_modified(self, event):
+        if event.src_path.endswith('.py'):
+            logging.info(f"파일 {event.src_path}가 수정되었습니다. 프로그램을 재시작합니다...")
+            os.execv(sys.executable, ['python'] + sys.argv)
+
+
+def start_file_watcher():
+    event_handler = FileChangeHandler()
+    observer = Observer()
+    observer.schedule(event_handler, path='.', recursive=False)
+    observer.start()
+    return observer
 
 
 def main():
