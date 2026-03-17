@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(del LEDController.py start_ari.sh audio_fix.sh start.sh 아리야아_ko_raspberry-pi_v3_0_0.ppn)",
+      "Bash(grep:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 10 python:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)",
+      "Bash(py -c:*)",
+      "Bash(py:*)",
+      "Bash(find:*)",
+      "Bash(/c/Users/안지훈/AppData/Local/Programs/Python/Python311/python.exe -c \"import VoiceCommand\")",
+      "Bash(dir:*)",
+      "Bash(powershell -Command \"Get-Item ''D:\\\\Git\\\\AI-Assistant\\\\VoiceCommand\\\\images\\\\idle1.png'' | Select-Object Name,Length\")"
+    ]
+  }
+}
