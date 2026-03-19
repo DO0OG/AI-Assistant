@@ -45,4 +45,9 @@ class SimpleAIAssistant:
 
 def get_ai_assistant():
     """AI 어시스턴트 싱글톤"""
-    return SimpleAIAssistant()
+    try:
+        from groq_assistant import get_groq_assistant
+        return get_groq_assistant()
+    except Exception as e:
+        logging.warning(f"Groq 초기화 실패, Simple AI 사용: {e}")
+        return SimpleAIAssistant()

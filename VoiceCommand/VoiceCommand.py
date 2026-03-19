@@ -1,9 +1,15 @@
 import os
+import sys
 import time
 import logging
 import warnings
 import random
 import speech_recognition as sr
+
+# SSL 인증서 경로 설정 (PyInstaller 환경)
+if getattr(sys, 'frozen', False):
+    import certifi
+    os.environ['SSL_CERT_FILE'] = certifi.where()
 from datetime import datetime
 from queue import Queue
 from PySide6.QtCore import QThread, Signal
@@ -11,9 +17,13 @@ from pydub import AudioSegment
 from pydub.playback import play
 from Config import use_api
 import json
-from fish_tts import FishTTS
+from fish_tts_ws import FishTTSWebSocket
 from rp_generator import RPGenerator
 from simple_wake import SimpleWakeWord
+from constants import (
+    WAKE_WORDS, WAKE_RESPONSES, SPEECH_LANGUAGE,
+    SPEECH_TIMEOUT, SPEECH_PHRASE_LIMIT, AMBIENT_NOISE_DURATION
+)
 
 # 새로운 모듈 import
 from weather_service import WeatherService
@@ -21,41 +31,79 @@ from timer_manager import TimerManager
 
 # 전역 변수 선언
 ai_assistant = None
-learning_mode = False
+learning_mode = {'enabled': False}  # dict로 변경하여 참조 전달
 fish_tts = None
 rp_gen = None
+character_widget = None
+_command_registry = None  # 명령 레지스트리 (나중에 초기화)
+
+import threading
+_tts_init_event = threading.Event()   # TTS 초기화 완료 신호
+_tts_init_started = False             # 백그라운드 초기화 시작 여부
+
+
+def start_tts_background():
+    """앱 시작 시 TTS를 백그라운드 스레드에서 미리 초기화"""
+    global _tts_init_started
+    if _tts_init_started:
+        return
+    _tts_init_started = True
+
+    def _run():
+        try:
+            initialize_tts()
+        except Exception as e:
+            logging.error(f"백그라운드 TTS 초기화 실패: {e}")
+        finally:
+            _tts_init_event.set()
+
+    t = threading.Thread(target=_run, daemon=True, name="TTS-Init")
+    t.start()
+    logging.info("TTS 백그라운드 초기화 시작")
 
 
 def initialize_tts():
-    """Fish TTS 초기화"""
+    """TTS 초기화 — tts_mode 설정에 따라 Fish Audio 또는 로컬 CosyVoice3 선택"""
     global fish_tts, rp_gen
-    try:
-        import json
-        with open("ari_settings.json", "r", encoding="utf-8") as f:
-            settings = json.load(f)
+    from config_manager import ConfigManager
 
-        fish_tts = FishTTS(
-            api_key=settings.get("fish_api_key", ""),
+    settings = ConfigManager.load_settings()
+    tts_mode = settings.get("tts_mode", "fish")  # "fish" | "local"
+
+    if tts_mode == "local":
+        try:
+            from cosyvoice_tts import CosyVoiceTTS
+            fish_tts = CosyVoiceTTS(
+                reference_text=settings.get("cosyvoice_reference_text", ""),
+                speed=float(settings.get("cosyvoice_speed", 0.9)),
+            )
+            logging.info("CosyVoice3 로컬 TTS 초기화 완료")
+        except Exception as e:
+            logging.error(f"CosyVoice3 초기화 실패, Fish Audio로 fallback: {e}")
+            tts_mode = "fish"
+
+    if tts_mode == "fish":
+        api_key = settings.get("fish_api_key", "")
+        if not api_key:
+            logging.warning("Fish API key가 설정되지 않았습니다")
+        fish_tts = FishTTSWebSocket(
+            api_key=api_key,
             reference_id=settings.get("fish_reference_id", "")
         )
+        logging.info("Fish Audio TTS 초기화 완료")
 
-        rp_gen = RPGenerator()
-        rp_gen.set_config(
-            personality=settings.get("personality", ""),
-            scenario=settings.get("scenario", ""),
-            system_prompt=settings.get("system_prompt", ""),
-            history_instruction=settings.get("history_instruction", "")
-        )
-
-        logging.info("Fish TTS 및 RP 초기화 완료")
-    except Exception as e:
-        logging.warning(f"설정 로드 실패: {e}")
-        fish_tts = FishTTS()
-        rp_gen = RPGenerator()
+    rp_gen = RPGenerator()
+    rp_gen.set_config(
+        personality=settings.get("personality", ""),
+        scenario=settings.get("scenario", ""),
+        system_prompt=settings.get("system_prompt", ""),
+        history_instruction=settings.get("history_instruction", "")
+    )
+    _tts_init_event.set()  # 직접 호출된 경우에도 완료 신호
 
 
-# 초기화
-initialize_tts()
+# 초기화 제거 - lazy loading으로 변경
+# initialize_tts()
 
 # 모듈 인스턴스 초기화
 weather_service = None
@@ -75,13 +123,52 @@ def initialize_modules():
     logging.info("기능 모듈 초기화 완료")
 
 
-# 모듈 초기화
+def _initialize_command_registry():
+    """명령 레지스트리 초기화 (adjust_volume 정의 이후 호출)"""
+    global _command_registry
+    from commands.command_registry import CommandRegistry
+    _command_registry = CommandRegistry(
+        ai_assistant=None,  # 나중에 set_ai_assistant()에서 설정
+        weather_service=weather_service,
+        timer_manager=timer_manager,
+        adjust_volume_func=adjust_volume,
+        tts_func=tts_wrapper,
+        learning_mode_ref=learning_mode
+    )
+    logging.info("명령 레지스트리 초기화 완료")
+
+
+# 기능 모듈 초기화 (weather_service, timer_manager)
 initialize_modules()
 
 
 def set_ai_assistant(assistant):
-    global ai_assistant
+    global ai_assistant, _command_registry
     ai_assistant = assistant
+
+    # 명령 레지스트리에 AI 어시스턴트 설정
+    if _command_registry:
+        from commands.ai_command import AICommand
+        # AI 명령 찾아서 업데이트
+        for i, cmd in enumerate(_command_registry.commands):
+            if isinstance(cmd, AICommand):
+                _command_registry.commands[i] = AICommand(
+                    ai_assistant=assistant,
+                    tts_func=tts_wrapper,
+                    learning_mode_ref=learning_mode
+                )
+                break
+
+
+def set_character_widget(widget):
+    global character_widget, fish_tts
+    character_widget = widget
+
+    # TTS 완료 시 말풍선 숨김 연결
+    if fish_tts and hasattr(fish_tts, 'playback_finished'):
+        fish_tts.playback_finished.connect(
+            lambda: character_widget.hide_speech_bubble_signal.emit()
+        )
 
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -89,7 +176,31 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def text_to_speech(text):
     """Fish TTS로 음성 출력"""
-    global fish_tts, rp_gen
+    global fish_tts, rp_gen, character_widget
+
+    # 백그라운드 초기화 완료 대기 (최대 360초)
+    if fish_tts is None:
+        if _tts_init_started:
+            logging.info("TTS 초기화 완료 대기 중...")
+            _tts_init_event.wait(timeout=360)
+        else:
+            # 백그라운드 초기화가 시작되지 않은 경우 직접 초기화
+            initialize_tts()
+
+        # 초기화 후 character_widget 연결 설정
+        if fish_tts and character_widget and hasattr(fish_tts, 'playback_finished'):
+            try:
+                fish_tts.playback_finished.disconnect()
+            except:
+                pass
+            fish_tts.playback_finished.connect(
+                lambda: character_widget.hide_speech_bubble_signal.emit()
+            )
+            logging.info("TTS playback_finished 시그널 연결됨")
+
+    if fish_tts is None:
+        logging.error("TTS를 초기화할 수 없습니다")
+        return False
 
     try:
         # RP 텍스트 생성
@@ -97,146 +208,76 @@ def text_to_speech(text):
             text = rp_gen.generate(text)
 
         # TTS 재생
-        if fish_tts:
-            success = fish_tts.speak(text)
-            if not success:
-                logging.error("TTS 재생 실패")
-        else:
-            logging.error("Fish TTS 미초기화")
+        success = fish_tts.speak(text)
+        if not success:
+            logging.error("TTS 재생 실패")
+        return success
     except Exception as e:
         logging.error(f"TTS 오류: {e}")
+        return False
 
 
-def tts_wrapper(text):
+def tts_wrapper(text, show_bubble=True):
+    """TTS 재생 + 말풍선 표시"""
+    # 말풍선 표시 (duration=0: TTS 끝날 때까지 유지)
+    if show_bubble and character_widget:
+        character_widget.say(text, duration=0)
+
+    # TTS 재생 (끝나면 자동으로 말풍선 숨김)
     text_to_speech(text)
 
 
 def execute_command(command):
-    """명령 실행 (새 모듈 사용)"""
-    global learning_mode
+    """명령 실행"""
+    global _command_registry
     logging.info(f"실행할 명령: {command}")
 
-    # 학습 모드 제어
-    if "학습 모드" in command:
-        if "비활성화" in command or "종료" in command:
-            learning_mode = False
-            tts_wrapper("학습 모드가 비활성화되었습니다.")
-        elif "활성화" in command or "시작" in command:
-            learning_mode = True
-            tts_wrapper("학습 모드가 활성화되었습니다.")
-        return
-
-    # 타이머 명령
-    elif "타이머" in command:
-        if "취소" in command or "끄기" in command or "중지" in command:
-            timer_manager.cancel()
-        else:
-            minutes = timer_manager.parse_timer_command(command)
-            if minutes:
-                timer_manager.set_timer(minutes)
-            else:
-                tts_wrapper("타이머 시간을 정확히 말씀해 주세요.")
-
-    # 날씨 명령
-    elif "날씨 어때" in command:
-        try:
-            weather_info = weather_service.get_weather()
-            tts_wrapper(weather_info)
-        except Exception as e:
-            logging.error(f"날씨 정보 조회 중 오류 발생: {str(e)}")
-            tts_wrapper("날씨 정보를 가져오는 데 실패했습니다.")
-
-    # 시스템 명령
-    elif "볼륨" in command:
-        if "키우기" in command or "올려" in command:
-            adjust_volume(0.1)
-        elif "줄이기" in command or "내려" in command:
-            adjust_volume(-0.1)
-        elif "음소거 해제" in command:
-            adjust_volume(0)
-        elif "음소거" in command:
-            adjust_volume(-1)
-    elif "몇 시야" in command:
-        time_str = get_current_time()
-        response = f"현재 시간은 {time_str}입니다."
-        tts_wrapper(response)
-        logging.info(f"현재 시간 안내: {response}")
-
-    # AI 어시스턴트 (기본)
+    if _command_registry:
+        _command_registry.execute(command)
     else:
-        response, entities, sentiment = ai_assistant.process_query(command)
-        tts_wrapper(response)
-        logging.info(f"인식된 개체: {entities}")
-        logging.info(f"감성 분석 결과: {sentiment}")
-
-        if learning_mode:
-            tts_wrapper("응답이 적절했나요? '적절' 또는 '부적절'로 대답해주세요.")
-            feedback = listen_for_feedback()
-
-            if "부적절" in feedback.lower():
-                tts_wrapper("새로운 응답을 말씀해 주세요.")
-                new_response = listen_for_new_response()
-                if new_response:
-                    ai_assistant.learn_new_response(command, new_response)
-                    tts_wrapper("새로운 응답을 학습했습니다. 감사합니다.")
-                    ai_assistant.update_q_table(command, "say_sorry", -1, command)
-                else:
-                    tts_wrapper("새로운 응답을 학습하지 못했습니다. 죄송합니다.")
-            else:
-                tts_wrapper("감사합니다. 앞으로도 좋은 답변을 드리도록 노력하겠습니다.")
-                ai_assistant.update_q_table(command, "use_best_response", 1, command)
+        logging.error("명령 레지스트리가 초기화되지 않았습니다.")
 
 
-def listen_for_feedback():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        logging.info("피드백 대기 중...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+def listen_for_speech(timeout: int = 5, phrase_time_limit: int = 5,
+                      prompt: str = None):
+    """
+    음성 입력을 듣고 텍스트로 변환
+
+    Args:
+        timeout: 음성 입력 대기 시간 (초)
+        phrase_time_limit: 최대 녹음 시간 (초)
+        prompt: 사용자에게 먼저 말할 메시지 (선택)
+
+    Returns:
+        인식된 텍스트 또는 None
+    """
+    if prompt:
+        tts_wrapper(prompt)
 
     try:
-        feedback = recognizer.recognize_google(audio, language="ko-KR")
-        logging.info(f"인식된 피드백: {feedback}")
-        return feedback
-    except sr.UnknownValueError:
-        logging.warning("피드백을 인식하지 못했습니다.")
-        return "인식 실패"
-    except sr.RequestError as e:
-        logging.error(f"음성 인식 서비스 오류: {e}")
-        return "오류 발생"
-
-
-def listen_for_new_response():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        logging.info("새로운 응답 대기 중...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        audio = recognizer.listen(source, timeout=10, phrase_time_limit=10)
-
-    try:
-        new_response = recognizer.recognize_google(audio, language="ko-KR")
-        logging.info(f"인식된 새로운 응답: {new_response}")
-        return new_response
-    except sr.UnknownValueError:
-        tts_wrapper("죄송합니다. 응답을 이해하지 못했습니다. 다시 말씀해 주세요.")
-        return listen_for_new_response()
-    except sr.RequestError as e:
-        logging.error(f"음성 인식 서비스 오류: {e}")
-        tts_wrapper(
-            "음성 인식 서비스에 문제가 발생했습니다. 나중에 다시 시도해 주세요."
-        )
+        recognizer = sr.Recognizer()
+        with sr.Microphone() as source:
+            recognizer.adjust_for_ambient_noise(source, duration=AMBIENT_NOISE_DURATION)
+            audio = recognizer.listen(
+                source,
+                timeout=timeout,
+                phrase_time_limit=phrase_time_limit
+            )
+            text = recognizer.recognize_google(audio, language=SPEECH_LANGUAGE)
+            logging.info(f"음성 인식: {text}")
+            return text
+    except sr.WaitTimeoutError:
+        logging.warning("음성 입력 시간 초과")
         return None
-
-
-def get_current_time():
-    now = datetime.now()
-    if now.hour < 12:
-        am_pm = "오전"
-        hour = now.hour
-    else:
-        am_pm = "오후"
-        hour = now.hour - 12 if now.hour > 12 else 12
-    return f"{am_pm} {hour}시 {now.minute}분"
+    except sr.UnknownValueError:
+        logging.warning("음성을 이해할 수 없습니다")
+        return None
+    except sr.RequestError as e:
+        logging.error(f"Google Speech Recognition 오류: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"음성 인식 오류: {e}")
+        return None
 
 
 def adjust_volume(change):
@@ -271,7 +312,7 @@ class VoiceRecognitionThread(QThread):
         self.microphone_index = None
 
         # 간단한 웨이크워드
-        self.wake_detector = SimpleWakeWord(wake_words=["아리야", "시작"])
+        self.wake_detector = SimpleWakeWord(wake_words=WAKE_WORDS)
 
         # 마이크 초기화
         self.speech_recognizer = sr.Recognizer()
@@ -309,21 +350,27 @@ class VoiceRecognitionThread(QThread):
 
 
     def handle_wake_word(self):
-        logging.info("웨이크 워드 '아리야' 감지!")
-        wake_responses = ["네?", "부르셨나요?"]
-        response = random.choice(wake_responses)
+        logging.info("웨이크 워드 감지!")
+        response = random.choice(WAKE_RESPONSES)
         tts_wrapper(response)
+        time.sleep(0.3)  # TTS 에코 정착 대기
         self.listening_state_changed.emit(True)
         self.recognize_speech()
         self.listening_state_changed.emit(False)
+        # 대화 후 재캘리브레이션 (주변 소음이 변했을 경우 대비)
+        self.wake_detector.recalibrate()
 
     def recognize_speech(self):
         try:
             with self.microphone as source:
                 logging.info("말씀해 주세요...")
-                audio = self.speech_recognizer.listen(source, timeout=5, phrase_time_limit=5)
+                audio = self.speech_recognizer.listen(
+                    source,
+                    timeout=SPEECH_TIMEOUT,
+                    phrase_time_limit=SPEECH_PHRASE_LIMIT
+                )
 
-            text = self.speech_recognizer.recognize_google(audio, language="ko-KR")
+            text = self.speech_recognizer.recognize_google(audio, language=SPEECH_LANGUAGE)
             logging.info(f"인식된 텍스트: {text}")
             self.result.emit(text)
 
@@ -336,14 +383,25 @@ class VoiceRecognitionThread(QThread):
 
     def cleanup(self):
         logging.info("음성 인식 스레드 종료 중...")
+        if hasattr(self, 'wake_detector'):
+            # SimpleWakeWord에 stop 플래그 전달
+            self.wake_detector.should_stop = True
+        # 마이크 리소스 해제
+        if hasattr(self, 'microphone'):
+            self.microphone = None
         logging.info("음성 인식 스레드 종료 완료")
 
     def get_voice_feedback(self):
         pass
 
     def stop(self):
+        logging.info("VoiceRecognitionThread.stop() called")
         self.running = False
-        self.wait()  # 스레드가 완전히 종료될 때까지 대기
+        if hasattr(self, 'wake_detector'):
+            self.wake_detector.should_stop = True
+        # 타임아웃 추가
+        if not self.wait(5000):
+            logging.warning("VoiceRecognitionThread timeout")
 
 
 # TTS 스레드
@@ -353,12 +411,19 @@ class TTSThread(QThread):
         self.queue = Queue()
 
     def run(self):
+        logging.info("TTSThread started")
         while True:
-            text = self.queue.get()
-            if text is None:
-                break
-            text_to_speech(text)
-            self.queue.task_done()
+            try:
+                text = self.queue.get(timeout=1.0)  # 타임아웃 추가
+                if text is None:
+                    logging.info("TTSThread stop signal received")
+                    break
+                text_to_speech(text)
+                self.queue.task_done()
+            except Exception as e:
+                if "Empty" not in str(type(e).__name__):
+                    logging.error(f"TTSThread error: {e}")
+                continue  # 다시 체크
 
     def speak(self, text):
         self.queue.put(text)
@@ -372,12 +437,23 @@ class CommandExecutionThread(QThread):
         self.queue = Queue()
 
     def run(self):
+        logging.info("CommandExecutionThread started")
         while True:
-            command = self.queue.get()
-            if command is None:
-                break
-            execute_command(command)
-            self.queue.task_done()
+            try:
+                command = self.queue.get(timeout=1.0)  # 타임아웃 추가
+                if command is None:
+                    logging.info("CommandExecutionThread stop signal received")
+                    break
+                execute_command(command)
+                self.queue.task_done()
+            except Exception as e:
+                if "Empty" not in str(type(e).__name__):
+                    logging.error(f"CommandExecutionThread error: {e}")
+                continue  # 다시 체크
 
     def execute(self, command):
         self.queue.put(command)
+
+
+# 명령 레지스트리 초기화 (모든 함수 정의 이후)
+_initialize_command_registry()

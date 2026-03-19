@@ -1,54 +1,29 @@
-# requirements.txt
-
-# 기본 패키지
-requests==2.32.3
-numpy==1.23.5
-scipy==1.11.4
-
-# 머신러닝 및 딥러닝
-# (제거됨: 간단한 AI로 대체)
-
-# NLP
-nltk==3.8.1
-
-# 음성 처리
+# 음성 인식
 SpeechRecognition==3.10.1
-pydub==0.25.1
 pyaudio==0.2.14
 
-# 오디오 재생
-pygame==2.5.2
+# AI
+groq==0.11.0
 
-# 오디오 및 비디오 처리
-yt-dlp==2023.12.30
-python-vlc==3.0.20123
-
-# 텍스트 음성 변환
-# (Fish Audio API 사용)
+# TTS
+fish-audio-sdk
+websockets==12.0
+numpy
 
 # GUI
 PySide6==6.6.1
 
-# 시스템 및 하드웨어 제어
+# 시스템
 psutil==5.9.7
+pycaw==20230407
+comtypes==1.4.1
+certifi
 
-# 비동기 및 네트워킹
+# 파일 감시 (자동 리로드)
+watchdog
+
+# 오디오
+pydub==0.25.1
 
 # 유틸리티
-tqdm==4.66.5
-pydantic==1.8.2
-smart_open==6.4.0
-pathlib-abc==0.1.1
-
-# 데이터베이스
-sqlalchemy==2.0.25
-
-# 설정 및 로깅
-python-dotenv==1.0.0
-coloredlogs==15.0.1
-
-# 기타
-Jinja2==3.1.4
-marisa-trie==1.2.0pycaw==20230407
-comtypes==1.4.1
-pynput
+requests==2.32.3

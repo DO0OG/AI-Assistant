@@ -17,9 +17,10 @@ from VoiceCommand import (
     VoiceRecognitionThread,
     tts_wrapper,
     TTSThread,
-    # ModelLoadingThread 제거
     CommandExecutionThread,
     set_ai_assistant,
+    set_character_widget,
+    start_tts_background,
 )
 import json
 from watchdog.observers import Observer
@@ -44,7 +45,8 @@ if not os.path.exists(icon_path):
 
 # 로그 설정
 def setup_logging():
-    log_dir = "logs"
+    from resource_manager import ResourceManager
+    log_dir = ResourceManager.get_writable_path("logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -119,9 +121,28 @@ class SystemTrayIcon(QSystemTrayIcon):
         super(SystemTrayIcon, self).__init__(icon, parent)
         self.setToolTip(f"Ari Voice Command")
         self.should_exit = False
+        self.character_widget = None  # 캐릭터 위젯 참조 초기화
 
         self.menu = QMenu(parent)
         self.setContextMenu(self.menu)
+
+        # 캐릭터 표시/숨기기 메뉴 추가 (최상단)
+        self.character_action = self.menu.addAction("캐릭터 표시")
+        self.character_action.triggered.connect(self.toggle_character)
+
+        self.menu.addSeparator()
+
+        # 스마트 어시스턴트 모드 토글 추가
+        self.smart_mode_action = self.menu.addAction("스마트 어시스턴트 모드")
+        self.smart_mode_action.setCheckable(True)
+        self.smart_mode_action.triggered.connect(self.toggle_smart_mode)
+
+        # 마우스 반응 토글 추가
+        self.mouse_reaction_action = self.menu.addAction("마우스 반응")
+        self.mouse_reaction_action.setCheckable(True)
+        self.mouse_reaction_action.triggered.connect(self.toggle_mouse_reaction)
+
+        self.menu.addSeparator()
 
         # 설정 메뉴 추가
         self.settings_action = self.menu.addAction("설정")
@@ -132,18 +153,86 @@ class SystemTrayIcon(QSystemTrayIcon):
         self.exit_action = self.menu.addAction("종료")
         self.exit_action.triggered.connect(self.exit)
 
+        # 메뉴가 열릴 때마다 상태 업데이트
+        self.menu.aboutToShow.connect(self.update_character_menu_text)
+        self.menu.aboutToShow.connect(self.update_smart_mode_status)
+        self.menu.aboutToShow.connect(self.update_mouse_reaction_status)
+
+    def toggle_smart_mode(self):
+        """스마트 어시스턴트 모드 토글"""
+        from VoiceCommand import learning_mode
+        learning_mode['enabled'] = self.smart_mode_action.isChecked()
+
+        status = "활성화" if learning_mode['enabled'] else "비활성화"
+        logging.info(f"스마트 어시스턴트 모드 {status}")
+
+        # 캐릭터에게 알림
+        if self.character_widget:
+            message = f"스마트 어시스턴트 모드가 {status}되었습니다."
+            self.character_widget.say(message, duration=3000)
+
+    def update_smart_mode_status(self):
+        """스마트 모드 상태 업데이트"""
+        from VoiceCommand import learning_mode
+        self.smart_mode_action.setChecked(learning_mode['enabled'])
+
+    def toggle_mouse_reaction(self):
+        """마우스 반응 토글"""
+        if self.character_widget:
+            self.character_widget.toggle_mouse_tracking()
+
+    def update_mouse_reaction_status(self):
+        """마우스 반응 상태 업데이트"""
+        if self.character_widget:
+            self.mouse_reaction_action.setChecked(self.character_widget.mouse_tracking_enabled)
+
     def open_settings(self):
         """설정 창 열기"""
         dialog = SettingsDialog()
         if dialog.exec() == QDialog.Accepted:
-            # 설정 변경 후 TTS 재초기화
-            from VoiceCommand import initialize_tts
-            initialize_tts()
-            logging.info("설정이 저장되고 TTS가 재초기화되었습니다.")
+            # 설정 변경 후 TTS 재초기화 (백그라운드)
+            from VoiceCommand import initialize_tts, _tts_init_event
+            import threading
+            _tts_init_event.clear()
+
+            def _reinit():
+                try:
+                    initialize_tts()
+                except Exception as e:
+                    logging.error(f"TTS 재초기화 실패: {e}")
+
+            threading.Thread(target=_reinit, daemon=True, name="TTS-Reinit").start()
+            logging.info("설정이 저장되고 TTS 재초기화를 시작했습니다.")
 
     def exit(self):
         self.should_exit = True
         QApplication.instance().quit()
+
+    def set_character_widget(self, character_widget):
+        """캐릭터 위젯 참조 설정"""
+        self.character_widget = character_widget
+        self.update_character_menu_text()
+        logging.info("시스템 트레이에 캐릭터 위젯 참조가 설정되었습니다.")
+
+    def toggle_character(self):
+        """캐릭터 표시/숨기기 토글"""
+        if not self.character_widget:
+            logging.warning("캐릭터 위젯이 초기화되지 않았습니다.")
+            return
+
+        if self.character_widget.isVisible():
+            self.character_widget.hide()
+            logging.info("캐릭터를 숨겼습니다.")
+        else:
+            self.character_widget.show()
+            logging.info("캐릭터를 표시했습니다.")
+
+    def update_character_menu_text(self):
+        """캐릭터 메뉴 텍스트 업데이트"""
+        if self.character_widget and self.character_widget.isVisible():
+            self.character_action.setText("캐릭터 숨기기")
+        else:
+            self.character_action.setText("캐릭터 표시")
 
 
 class AriCore(QObject):
@@ -173,8 +262,10 @@ class AriCore(QObject):
         self.voice_thread.result.connect(self.handle_voice_result)
 
     def load_settings(self):
+        from resource_manager import ResourceManager
+        settings_path = ResourceManager.get_writable_path("settings.json")
         try:
-            with open("settings.json", "r") as f:
+            with open(settings_path, "r") as f:
                 settings = json.load(f)
             selected_microphone = settings.get("microphone", "")
             if selected_microphone:
@@ -192,8 +283,10 @@ class AriCore(QObject):
         self.voice_thread.set_microphone(None)
 
     def save_settings(self, microphone):
+        from resource_manager import ResourceManager
+        settings_path = ResourceManager.get_writable_path("settings.json")
         settings = {"microphone": microphone}
-        with open("settings.json", "w") as f:
+        with open(settings_path, "w") as f:
             json.dump(settings, f)
 
     def handle_voice_result(self, text):
@@ -201,17 +294,43 @@ class AriCore(QObject):
         self.command_thread.execute(text)
 
     def cleanup(self):
+        logging.info("=== AriCore cleanup 시작 ===")
+
+        # Step 1: 음성 인식 먼저 중지 (새 명령 차단)
+        logging.info("Step 1/6: 음성 인식 중지")
         self.voice_thread.stop()
-        self.voice_thread.wait()
+        if not self.voice_thread.wait(5000):
+            logging.warning("음성 인식 스레드 타임아웃")
+
+        # Step 2: 파일 감시자 중지
+        logging.info("Step 2/6: 파일 감시자 중지")
+        if hasattr(self, 'file_observer') and self.file_observer:
+            self.file_observer.stop()
+            self.file_observer.join(timeout=2)
+
+        # Step 3: TTS 스레드 중지
+        logging.info("Step 3/6: TTS 스레드 중지")
         self.tts_thread.queue.put(None)
+        if not self.tts_thread.wait(5000):
+            logging.warning("TTS 스레드 타임아웃")
+
+        # Step 4: 명령 실행 스레드 중지
+        logging.info("Step 4/6: 명령 실행 스레드 중지")
         self.command_thread.queue.put(None)
-        self.tts_thread.wait()
-        self.command_thread.wait()
+        if not self.command_thread.wait(5000):
+            logging.warning("명령 실행 스레드 타임아웃")
+
+        # Step 5: 리소스 모니터 중지
+        logging.info("Step 5/6: 리소스 모니터 중지")
         self.resource_monitor.stop()
-        logging.info("AriCore 정리 완료")
-        self.file_observer.stop()
-        self.file_observer.join()
-        logging.info("파일 감시 종료")
+
+        # Step 6: TTS 리소스 정리
+        logging.info("Step 6/6: TTS 리소스 정리")
+        from VoiceCommand import fish_tts
+        if fish_tts:
+            fish_tts.cleanup()
+
+        logging.info("=== AriCore cleanup 완료 ===")
 
 
 class FileChangeHandler(FileSystemEventHandler):
@@ -222,11 +341,71 @@ class FileChangeHandler(FileSystemEventHandler):
 
 
 def start_file_watcher():
+    # 배포(frozen) 환경에서는 파일 감시 불필요
+    if getattr(sys, 'frozen', False):
+        return None
     event_handler = FileChangeHandler()
     observer = Observer()
     observer.schedule(event_handler, path='.', recursive=False)
     observer.start()
     return observer
+
+
+def check_cosyvoice_first_run(app):
+    """최초 실행 시 CosyVoice 설치 여부 확인"""
+    from resource_manager import ResourceManager
+    FLAG_FILE = ResourceManager.get_writable_path(".cosyvoice_asked")
+    COSYVOICE_DIR = r"D:\Git\CosyVoice"
+
+    if os.path.exists(FLAG_FILE) or os.path.exists(COSYVOICE_DIR):
+        return  # 이미 물어봤거나 설치됨
+
+    from PySide6.QtWidgets import QMessageBox
+    msg = QMessageBox()
+    msg.setWindowTitle("CosyVoice3 로컬 TTS")
+    msg.setText(
+        "로컬 TTS 엔진 CosyVoice3를 설치하시겠습니까?\n\n"
+        "• 설치 시: 고품질 한국어 TTS 사용 가능 (GPU 권장, 약 2~5GB)\n"
+        "• 미설치 시: Fish Audio API TTS 사용 (인터넷 필요)\n\n"
+        "나중에 설치하려면 install_cosyvoice.py를 직접 실행하세요."
+    )
+    msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    msg.setDefaultButton(QMessageBox.No)
+    msg.button(QMessageBox.Yes).setText("설치")
+    msg.button(QMessageBox.No).setText("나중에")
+
+    # 플래그 파일 생성 (다시 묻지 않음)
+    open(FLAG_FILE, "w").close()
+
+    if msg.exec() == QMessageBox.Yes:
+        import threading
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import Qt
+
+        progress = QProgressDialog("CosyVoice3 설치 중...\n콘솔 창에서 진행 상황을 확인하세요.", None, 0, 0)
+        progress.setWindowTitle("설치 중")
+        progress.setWindowModality(Qt.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        app.processEvents()
+
+        def run_install():
+            try:
+                import install_cosyvoice
+                install_cosyvoice.install()
+            except Exception as e:
+                logging.error(f"CosyVoice 설치 오류: {e}")
+            finally:
+                progress.close()
+
+        t = threading.Thread(target=run_install, daemon=True)
+        t.start()
+        while t.is_alive():
+            app.processEvents()
+            time.sleep(0.1)
+
+        QMessageBox.information(None, "설치 완료",
+            "CosyVoice3 설치가 완료되었습니다.\n설정에서 TTS 모드를 '로컬 (CosyVoice3)'으로 변경하세요.")
 
 
 def main():
@@ -238,7 +417,15 @@ def main():
         setup_logging()
         logging.info("프로그램 시작")
 
+        # 리소스 추출
+        from resource_manager import ResourceManager
+        logging.info("리소스 추출 확인 중...")
+        ResourceManager.extract_resources()
+
         app = QApplication(sys.argv)
+
+        # 최초 실행 시 CosyVoice 설치 여부 확인
+        check_cosyvoice_first_run(app)
 
         # AI 어시스턴트 초기화
         ai_assistant = get_ai_assistant()
@@ -256,31 +443,33 @@ def main():
 
         ari_core = AriCore()
 
+        # TTS 백그라운드 초기화 시작 (CosyVoice 모델 로드를 미리 시작)
+        start_tts_background()
+
         # 캐릭터 위젯 생성
         character = CharacterWidget()
+        set_character_widget(character)
 
-        tts_wrapper("안녕하세요")
+        # 트레이 아이콘에 캐릭터 참조 설정
+        if use_system_tray and tray_icon:
+            tray_icon.set_character_widget(character)
 
         # 메인 이벤트 루프 실행
-        while True:
-            app.processEvents()  # Qt 이벤트 처리
-
-            # 종료 플래그 확인
-            if tray_icon and tray_icon.should_exit:
-                logging.info("종료 요청됨")
-                break
-
-            time.sleep(0.1)  # CPU 사용량을 줄이기 위한 짧은 대기
+        exit_code = app.exec()  # Qt 표준 이벤트 루프 사용
+        logging.info(f"Application exited with code: {exit_code}")
 
     except KeyboardInterrupt:
         logging.info("프로그램 종료")
     except Exception as e:
         logging.error(f"예외 발생: {str(e)}", exc_info=True)
     finally:
+        logging.info("=== 앱 종료 시작 ===")
         if character:
             character.cleanup()
+            character.close()
         if ari_core:
             ari_core.cleanup()
+        logging.info("=== 앱 종료 완료 ===")
 
 if __name__ == "__main__":
     main()
