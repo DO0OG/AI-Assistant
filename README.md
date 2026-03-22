@@ -1,5 +1,7 @@
 # Ari (아리) — AI 음성 어시스턴트
 
+[![Codacy Badge](https://api.codacy.com/project/badge/Grade/928c2d800acd486aaeb54ccb85eef705)](https://app.codacy.com/gh/DO0OG/AI-Assistant?utm_source=github.com&utm_medium=referral&utm_content=DO0OG/AI-Assistant&utm_campaign=Badge_Grade)
+
 > 한국어 음성 인식 기반 데스크탑 AI 어시스턴트.
 > Shimeji 스타일 캐릭터 위젯 + 다중 LLM / TTS 제공자 선택 지원.
 
