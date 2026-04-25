@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from commands.base_command import BaseCommand, CommandResult
+from i18n.translator import _
 
 
 PLUGIN_INFO = {
@@ -157,7 +158,8 @@ class GamifyEngine:
         return int(self.state["level"]) > previous_level
 
     def title(self) -> str:
-        return LEVEL_TITLES[min(int(self.state.get("level", 0)), len(LEVEL_TITLES) - 1)]
+        key = LEVEL_TITLES[min(int(self.state.get("level", 0)), len(LEVEL_TITLES) - 1)]
+        return _(key)
 
     def _choose_daily(self, today: date) -> dict[str, Any]:
         quest = dict(self.rng.choice(DAILY_QUESTS))
@@ -288,11 +290,11 @@ class GamifyEngine:
     def start_number_guess(self, difficulty: str = "normal") -> str:
         high = {"easy": 50, "normal": 100, "hard": 500}.get(difficulty, 100)
         self.number_guess = NumberGuessSession(answer=self.rng.randint(1, high), high=high)
-        return f"1부터 {high} 사이 숫자를 맞춰보세요!"
+        return _("1부터 {high} 사이 숫자를 맞춰보세요!", high=high)
 
     def guess_number(self, guess: int) -> tuple[bool, str]:
         if self.number_guess is None:
-            return False, "진행 중인 숫자 게임이 없어요."
+            return False, _("진행 중인 숫자 게임이 없어요.")
         session = self.number_guess
         session.attempts += 1
         if guess == session.answer:
@@ -306,12 +308,12 @@ class GamifyEngine:
             self._progress_daily("play_minigame")
             self._unlock_minigame_achievement()
             self.save()
-            return True, f"[기쁨]정답이에요! {session.attempts}번 만에 맞추셨어요. +30 XP!"
+            return True, _("[기쁨]정답이에요! {attempts}번 만에 맞추셨어요. +30 XP!", attempts=session.attempts)
         if guess < session.answer:
             session.low = max(session.low, guess)
-            return False, f"더 높아요! [힌트: {session.low}~{session.high}]"
+            return False, _("더 높아요! [힌트: {low}~{high}]", low=session.low, high=session.high)
         session.high = min(session.high, guess)
-        return False, f"더 낮아요! [힌트: {session.low}~{session.high}]"
+        return False, _("더 낮아요! [힌트: {low}~{high}]", low=session.low, high=session.high)
 
     def answer_trivia(self, answer: str) -> str:
         question, expected, explanation = self.rng.choice(TRIVIA)
@@ -324,8 +326,13 @@ class GamifyEngine:
             self._progress_daily("play_minigame")
             self._unlock_minigame_achievement()
             self.save()
-            return f"[기쁨]정답! {explanation} +10 XP"
-        return f"아쉬워요. 문제: {question} 정답은 {'O' if expected else 'X'}예요. {explanation}"
+            return _("[기쁨]정답! {explanation} +10 XP", explanation=explanation)
+        return _(
+            "아쉬워요. 문제: {question} 정답은 {answer}예요. {explanation}",
+            question=question,
+            answer="O" if expected else "X",
+            explanation=explanation,
+        )
 
     def _unlock_minigame_achievement(self) -> None:
         played = sum(1 for stats in self.state["minigame_stats"].values() if int(stats.get("wins", 0)) > 0)
@@ -336,21 +343,34 @@ class GamifyEngine:
         xp = int(self.state.get("xp", 0))
         level = int(self.state.get("level", 0))
         next_threshold = LEVEL_THRESHOLDS[min(level + 1, len(LEVEL_THRESHOLDS) - 1)]
-        return f"현재 레벨 {level} ({self.title()}), {xp}XP예요. 다음 목표는 {next_threshold}XP입니다."
+        return _(
+            "현재 레벨 {level} ({title}), {xp}XP예요. 다음 목표는 {next_threshold}XP입니다.",
+            level=level,
+            title=self.title(),
+            xp=xp,
+            next_threshold=next_threshold,
+        )
 
     def quest_summary(self) -> str:
         daily = self.state.get("daily_quest", {})
         weekly = self.state.get("weekly_quest", {})
-        return (
-            f"오늘의 퀘스트: {daily.get('description', '없음')} "
-            f"{daily.get('progress', 0)}/{daily.get('goal', 0)}. "
-            f"주간 퀘스트: {weekly.get('description', '없음')} "
-            f"{weekly.get('progress', 0)}/{weekly.get('goal', 0)}."
+        daily_desc = _(daily.get("description", "없음"))
+        weekly_desc = _(weekly.get("description", "없음"))
+        return _(
+            "오늘의 퀘스트: {daily_desc} {progress}/{goal}. 주간 퀘스트: {weekly_desc} {weekly_progress}/{weekly_goal}.",
+            daily_desc=daily_desc,
+            progress=daily.get("progress", 0),
+            goal=daily.get("goal", 0),
+            weekly_desc=weekly_desc,
+            weekly_progress=weekly.get("progress", 0),
+            weekly_goal=weekly.get("goal", 0),
         )
 
     def achievements_summary(self) -> str:
-        unlocked = [ACHIEVEMENTS.get(item, item) for item in self.state.get("achievements", [])]
-        return "달성 업적: " + (", ".join(unlocked) if unlocked else "아직 없어요.")
+        unlocked = [_(ACHIEVEMENTS.get(item, item)) for item in self.state.get("achievements", [])]
+        if unlocked:
+            return _("달성 업적: {list}", list=", ".join(unlocked))
+        return _("달성 업적: 아직 없어요.")
 
 
 class GamifyCommand(BaseCommand):
@@ -391,7 +411,7 @@ class GamifyCommand(BaseCommand):
             return CommandResult(True, message)
         if "퀴즈 게임" in normalized:
             question, _, _ = self.engine.rng.choice(TRIVIA)
-            message = f"문제입니다. '{question}' O 또는 X?"
+            message = _("문제입니다. '{question}' O 또는 X?", question=question)
             self.say(message)
             return CommandResult(True, message)
         if normalized.upper() in {"O", "X"}:
@@ -410,14 +430,14 @@ class GamifyCommand(BaseCommand):
             from core.VoiceCommand import enable_game_mode
 
             enable_game_mode()
-            message = "[흥분]게임 모드 활성화! 오늘도 열심히 해봐요~ 🎮"
+            message = _("[흥분]게임 모드 활성화! 오늘도 열심히 해봐요~ 🎮")
             self.say(message)
             return CommandResult(True, message)
         if "게임 모드 꺼" in normalized:
             from core.VoiceCommand import disable_game_mode
 
             disable_game_mode()
-            message = f"게임 모드를 종료합니다. 현재 총 {self.engine.state.get('xp', 0)}XP예요!"
+            message = _("게임 모드를 종료합니다. 현재 총 {xp}XP예요!", xp=self.engine.state.get("xp", 0))
             self.say(message)
             return CommandResult(True, message)
         message = self.engine.level_summary()
@@ -447,9 +467,9 @@ def register(context):
         events = engine.handle_command(payload)
         for event in events:
             if event == "level_up":
-                say(f"[기쁨]레벨 업! 이제 {engine.title()}예요.")
+                say(_("[기쁨]레벨 업! 이제 {title}예요.", title=engine.title()))
             elif event in ACHIEVEMENTS:
-                say(f"[기쁨]업적 달성! '{ACHIEVEMENTS[event]}'")
+                say(_("[기쁨]업적 달성! '{name}'", name=_(ACHIEVEMENTS[event])))
         if context.emit_event:
             context.emit_event("gamify.xp.updated", {"xp": engine.state.get("xp", 0), "level": engine.state.get("level", 0)})
 
@@ -457,9 +477,9 @@ def register(context):
         events = engine.handle_agent_completed(payload)
         for event in events:
             if event == "level_up":
-                say(f"[기쁨]레벨 업! 이제 {engine.title()}예요.")
+                say(_("[기쁨]레벨 업! 이제 {title}예요.", title=engine.title()))
             elif event in ACHIEVEMENTS:
-                say(f"[기쁨]업적 달성! '{ACHIEVEMENTS[event]}'")
+                say(_("[기쁨]업적 달성! '{name}'", name=_(ACHIEVEMENTS[event])))
 
     if context.subscribe_event:
         context.subscribe_event("command.executed", on_command)
